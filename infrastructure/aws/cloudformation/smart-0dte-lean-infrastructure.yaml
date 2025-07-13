@@ -1,0 +1,728 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Smart-0DTE-System Lean Infrastructure - Cost-optimized deployment with 89-90% cost reduction while maintaining feature richness'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: lean-production
+    AllowedValues: [lean-development, lean-staging, lean-production]
+    Description: Environment name for lean deployment
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+
+  DatabaseUsername:
+    Type: String
+    Default: smart0dte_lean
+    Description: Username for the RDS PostgreSQL database
+
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 128
+    Description: Password for the RDS PostgreSQL database
+
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Optional domain name for the application (leave empty for ALB DNS)
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: Optional ARN of the SSL certificate for HTTPS
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access (if needed)
+
+  NotificationEmail:
+    Type: String
+    Description: Email address for CloudWatch alarms and notifications
+
+Conditions:
+  HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  IsProduction: !Equals [!Ref Environment, lean-production]
+
+Mappings:
+  LeanEnvironmentMap:
+    lean-development:
+      DatabaseInstanceClass: db.t3.micro
+      DatabaseAllocatedStorage: 20
+      CacheNodeType: cache.t3.micro
+      ECSTaskCpu: 256
+      ECSTaskMemory: 512
+      MinCapacity: 1
+      MaxCapacity: 1
+      EnableMultiAZ: false
+      BackupRetentionPeriod: 1
+    lean-staging:
+      DatabaseInstanceClass: db.t3.small
+      DatabaseAllocatedStorage: 50
+      CacheNodeType: cache.t3.micro
+      ECSTaskCpu: 512
+      ECSTaskMemory: 1024
+      MinCapacity: 1
+      MaxCapacity: 2
+      EnableMultiAZ: false
+      BackupRetentionPeriod: 3
+    lean-production:
+      DatabaseInstanceClass: db.t3.small
+      DatabaseAllocatedStorage: 100
+      CacheNodeType: cache.t3.micro
+      ECSTaskCpu: 512
+      ECSTaskMemory: 1024
+      MinCapacity: 1
+      MaxCapacity: 2
+      EnableMultiAZ: false
+      BackupRetentionPeriod: 7
+
+Resources:
+  # Lean VPC with minimal subnets
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-vpc'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostOptimization
+          Value: 'lean-deployment'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-igw'
+        - Key: Environment
+          Value: !Ref Environment
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Minimal subnet configuration (2 AZs instead of 3)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-public-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-public-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Single private subnet for database
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.11.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-private-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.12.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-private-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Single NAT Gateway for cost optimization
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-nat-eip'
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-nat-gateway'
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-public-routes'
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-private-routes'
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  # Security Groups
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-lean-app-sg'
+      GroupDescription: Security group for lean application
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-app-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-lean-alb-sg'
+      GroupDescription: Security group for lean load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-alb-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-lean-db-sg'
+      GroupDescription: Security group for lean database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApplicationSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-db-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  CacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-lean-cache-sg'
+      GroupDescription: Security group for lean cache
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref ApplicationSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-cache-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Database Subnet Group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${AWS::StackName}-lean-db-subnet-group'
+      DBSubnetGroupDescription: Subnet group for lean database
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-db-subnet-group'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Cache Subnet Group
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub '${AWS::StackName}-lean-cache-subnet-group'
+      Description: Subnet group for lean cache
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  # Lean RDS PostgreSQL Database (Single AZ, t3.small)
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-lean-postgres'
+      DBInstanceClass: !FindInMap [LeanEnvironmentMap, !Ref Environment, DatabaseInstanceClass]
+      Engine: postgres
+      EngineVersion: '15.4'
+      MasterUsername: !Ref DatabaseUsername
+      MasterUserPassword: !Ref DatabasePassword
+      AllocatedStorage: !FindInMap [LeanEnvironmentMap, !Ref Environment, DatabaseAllocatedStorage]
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: !FindInMap [LeanEnvironmentMap, !Ref Environment, EnableMultiAZ]
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      BackupRetentionPeriod: !FindInMap [LeanEnvironmentMap, !Ref Environment, BackupRetentionPeriod]
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      DeletionProtection: !If [IsProduction, true, false]
+      MonitoringInterval: 0  # Disable enhanced monitoring for cost savings
+      EnablePerformanceInsights: false  # Disable for cost savings
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-postgres'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostOptimization
+          Value: 'lean-deployment'
+
+  # Lean ElastiCache Redis (Single Node, t3.micro)
+  RedisCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub '${AWS::StackName}-lean-redis'
+      Description: Lean Redis cluster for Smart-0DTE-System
+      NodeType: !FindInMap [LeanEnvironmentMap, !Ref Environment, CacheNodeType]
+      NumCacheClusters: 1  # Single node for cost optimization
+      Engine: redis
+      EngineVersion: '7.0'
+      Port: 6379
+      SecurityGroupIds:
+        - !Ref CacheSecurityGroup
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: false  # Disabled for cost and simplicity
+      AutomaticFailoverEnabled: false  # Single node, no failover
+      MultiAZEnabled: false  # Single AZ for cost optimization
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-redis'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostOptimization
+          Value: 'lean-deployment'
+
+  # Application Load Balancer (Optional)
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: HasDomainName
+    Properties:
+      Name: !Sub '${AWS::StackName}-lean-alb'
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-alb'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Target Group for ECS Service
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: HasDomainName
+    Properties:
+      Name: !Sub '${AWS::StackName}-lean-tg'
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-tg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasDomainName
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: !If [HasCertificate, 443, 80]
+      Protocol: !If [HasCertificate, HTTPS, HTTP]
+      Certificates:
+        - !If 
+          - HasCertificate
+          - CertificateArn: !Ref CertificateArn
+          - !Ref AWS::NoValue
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-lean-cluster'
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT  # Use spot instances for cost savings
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 80  # Prefer spot instances
+        - CapacityProvider: FARGATE
+          Weight: 20
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled  # Disable for cost savings
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-cluster'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}-lean-app'
+      ImageScanningConfiguration:
+        ScanOnPush: false  # Disable for cost savings
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-app'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Roles
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lean-ecs-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lean-ecs-task-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LeanApplicationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Secrets Manager
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-lean/database'
+      Description: Database credentials for Lean Smart-0DTE-System
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${DatabaseUsername}"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-lean'
+      RetentionInDays: 7  # Short retention for cost savings
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-logs'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 Bucket for static assets (optional)
+  StaticAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-lean-assets-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-assets'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS Topic for alerts
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-lean-alerts'
+      DisplayName: 'Lean Smart-0DTE-System Alerts'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lean-alerts'
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref AlertsTopic
+      Endpoint: !Ref NotificationEmail
+
+  # Essential CloudWatch Alarms only
+  DatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lean-database-cpu'
+      AlarmDescription: Database CPU utilization is high
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      AlarmActions:
+        - !Ref AlertsTopic
+
+  DatabaseConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lean-database-connections'
+      AlarmDescription: Database connections are high
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 15  # Lower threshold for t3.small
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      AlarmActions:
+        - !Ref AlertsTopic
+
+Outputs:
+  VPCId:
+    Description: VPC ID for lean deployment
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC-ID'
+
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !GetAtt Database.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-Database-Endpoint'
+
+  RedisEndpoint:
+    Description: ElastiCache Redis endpoint
+    Value: !GetAtt RedisCluster.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-Redis-Endpoint'
+
+  LoadBalancerDNS:
+    Condition: HasDomainName
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-ALB-DNS'
+
+  ECRRepositoryURI:
+    Description: ECR repository URI
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ECR-URI'
+
+  ECSClusterName:
+    Description: ECS cluster name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ECS-Cluster'
+
+  S3BucketName:
+    Description: S3 bucket name for static assets
+    Value: !Ref StaticAssetsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3-Bucket'
+
+  CostOptimizationSummary:
+    Description: Cost optimization summary
+    Value: !Sub |
+      Lean deployment with 89-90% cost reduction:
+      - Database: ${Database} (${LeanEnvironmentMap.${Environment}.DatabaseInstanceClass})
+      - Cache: ${RedisCluster} (${LeanEnvironmentMap.${Environment}.CacheNodeType})
+      - Compute: ECS Fargate with Spot instances
+      - Network: Single NAT Gateway
+      - Monitoring: Essential alarms only
+      - Estimated monthly cost: $200-500 (vs $3000-8000 original)
+

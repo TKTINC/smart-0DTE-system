@@ -1,0 +1,225 @@
+{
+  "family": "smart-0dte-lean-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/smart-0dte-lean-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/smart-0dte-lean-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "smart-0dte-lean-backend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/smart-0dte-lean-app:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ENVIRONMENT",
+          "value": "lean-production"
+        },
+        {
+          "name": "LEAN_MODE",
+          "value": "true"
+        },
+        {
+          "name": "DATA_OPTIMIZATION_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "CACHE_OPTIMIZATION_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "AI_OPTIMIZATION_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
+        },
+        {
+          "name": "PYTHONDONTWRITEBYTECODE",
+          "value": "1"
+        },
+        {
+          "name": "MAX_CONCURRENT_REQUESTS",
+          "value": "10"
+        },
+        {
+          "name": "DATA_RETENTION_DAYS",
+          "value": "30"
+        },
+        {
+          "name": "CACHE_TTL_SECONDS",
+          "value": "3600"
+        },
+        {
+          "name": "BATCH_SIZE",
+          "value": "100"
+        },
+        {
+          "name": "SAMPLING_RATE_SECONDS",
+          "value": "5"
+        },
+        {
+          "name": "MAX_MEMORY_MB",
+          "value": "512"
+        },
+        {
+          "name": "MAX_CPU_PERCENT",
+          "value": "50"
+        },
+        {
+          "name": "DATABASE_POOL_SIZE",
+          "value": "5"
+        },
+        {
+          "name": "DATABASE_MAX_OVERFLOW",
+          "value": "10"
+        },
+        {
+          "name": "REDIS_MAX_CONNECTIONS",
+          "value": "10"
+        },
+        {
+          "name": "DATABENTO_RATE_LIMIT",
+          "value": "30"
+        },
+        {
+          "name": "AI_MODEL_CACHE_SIZE",
+          "value": "50"
+        },
+        {
+          "name": "AI_PREDICTION_CACHE_TTL",
+          "value": "1800"
+        },
+        {
+          "name": "AI_MODEL_UPDATE_INTERVAL",
+          "value": "86400"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:smart-0dte-lean/database:DATABASE_URL::"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:smart-0dte-lean/redis:REDIS_URL::"
+        },
+        {
+          "name": "DATABENTO_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:smart-0dte-lean/api-keys:DATABENTO_API_KEY::"
+        },
+        {
+          "name": "IBKR_USERNAME",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:smart-0dte-lean/ibkr:USERNAME::"
+        },
+        {
+          "name": "IBKR_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:smart-0dte-lean/ibkr:PASSWORD::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/smart-0dte-lean",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8000/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "stopTimeout": 30,
+      "startTimeout": 120,
+      "dependsOn": [],
+      "volumesFrom": [],
+      "mountPoints": [],
+      "ulimits": [
+        {
+          "name": "nofile",
+          "softLimit": 1024,
+          "hardLimit": 2048
+        }
+      ],
+      "systemControls": [],
+      "resourceRequirements": [
+        {
+          "type": "InferenceAccelerator",
+          "value": "device_1"
+        }
+      ],
+      "firelensConfiguration": null,
+      "dockerLabels": {
+        "project": "smart-0dte-system",
+        "environment": "lean-production",
+        "cost-optimization": "enabled",
+        "version": "lean-v1.0"
+      },
+      "user": "smart0dte",
+      "workingDirectory": "/app",
+      "disableNetworking": false,
+      "privileged": false,
+      "readonlyRootFilesystem": false,
+      "dnsServers": [],
+      "dnsSearchDomains": [],
+      "extraHosts": [],
+      "dockerSecurityOptions": [
+        "no-new-privileges"
+      ],
+      "interactive": false,
+      "pseudoTerminal": false,
+      "systemControls": []
+    }
+  ],
+  "volumes": [],
+  "placementConstraints": [],
+  "tags": [
+    {
+      "key": "Project",
+      "value": "Smart-0DTE-System"
+    },
+    {
+      "key": "Environment",
+      "value": "lean-production"
+    },
+    {
+      "key": "CostOptimization",
+      "value": "enabled"
+    },
+    {
+      "key": "Version",
+      "value": "lean-v1.0"
+    }
+  ],
+  "pidMode": null,
+  "ipcMode": null,
+  "proxyConfiguration": null,
+  "inferenceAccelerators": [],
+  "ephemeralStorage": {
+    "sizeInGiB": 21
+  },
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  }
+}
+

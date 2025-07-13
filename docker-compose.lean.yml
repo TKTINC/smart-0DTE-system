@@ -1,0 +1,199 @@
+version: '3.8'
+
+services:
+  # Lean PostgreSQL Database
+  postgres-lean:
+    image: postgres:15-alpine
+    container_name: smart-0dte-postgres-lean
+    environment:
+      POSTGRES_DB: smart_0dte_lean
+      POSTGRES_USER: smart0dte_lean
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lean_dev_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    volumes:
+      - postgres_lean_data:/var/lib/postgresql/data
+      - ./infrastructure/database/init-lean.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=512MB
+      -c maintenance_work_mem=32MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=8MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_connections=50
+      -c work_mem=4MB
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart0dte_lean -d smart_0dte_lean"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - smart-0dte-lean
+
+  # Lean Redis Cache
+  redis-lean:
+    image: redis:7-alpine
+    container_name: smart-0dte-redis-lean
+    ports:
+      - "6380:6379"  # Different port to avoid conflicts
+    volumes:
+      - redis_lean_data:/data
+      - ./infrastructure/redis/redis-lean.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - smart-0dte-lean
+
+  # Lean Backend Application
+  backend-lean:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.lean
+      args:
+        - ENVIRONMENT=lean-development
+    container_name: smart-0dte-backend-lean
+    environment:
+      # Database Configuration
+      DATABASE_URL: postgresql://smart0dte_lean:${POSTGRES_PASSWORD:-lean_dev_password}@postgres-lean:5432/smart_0dte_lean
+      
+      # Redis Configuration
+      REDIS_URL: redis://redis-lean:6379/0
+      
+      # Application Configuration
+      ENVIRONMENT: lean-development
+      DEBUG: "true"
+      LOG_LEVEL: INFO
+      
+      # API Keys (use environment variables or .env file)
+      DATABENTO_API_KEY: ${DATABENTO_API_KEY:-}
+      IBKR_USERNAME: ${IBKR_USERNAME:-}
+      IBKR_PASSWORD: ${IBKR_PASSWORD:-}
+      
+      # Lean Configuration
+      LEAN_MODE: "true"
+      DATA_OPTIMIZATION_ENABLED: "true"
+      CACHE_OPTIMIZATION_ENABLED: "true"
+      AI_OPTIMIZATION_ENABLED: "true"
+      
+      # Cost Optimization Settings
+      MAX_CONCURRENT_REQUESTS: 10
+      DATA_RETENTION_DAYS: 30
+      CACHE_TTL_SECONDS: 3600
+      BATCH_SIZE: 100
+      SAMPLING_RATE_SECONDS: 5
+      
+      # Resource Limits
+      MAX_MEMORY_MB: 512
+      MAX_CPU_PERCENT: 50
+      
+    ports:
+      - "8001:8000"  # Different port to avoid conflicts
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/logs:/app/logs
+      - lean_model_cache:/app/models
+    depends_on:
+      postgres-lean:
+        condition: service_healthy
+      redis-lean:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - smart-0dte-lean
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Lean Frontend (Optional for local development)
+  frontend-lean:
+    build:
+      context: ./smart-0dte-frontend
+      dockerfile: Dockerfile.lean
+      args:
+        - REACT_APP_API_URL=http://localhost:8001
+        - REACT_APP_ENVIRONMENT=lean-development
+    container_name: smart-0dte-frontend-lean
+    ports:
+      - "3001:3000"  # Different port to avoid conflicts
+    environment:
+      - REACT_APP_API_URL=http://localhost:8001
+      - REACT_APP_ENVIRONMENT=lean-development
+      - GENERATE_SOURCEMAP=false  # Reduce build size
+    volumes:
+      - ./smart-0dte-frontend/src:/app/src:ro
+      - ./smart-0dte-frontend/public:/app/public:ro
+    depends_on:
+      - backend-lean
+    restart: unless-stopped
+    networks:
+      - smart-0dte-lean
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  # Lean Monitoring (Lightweight)
+  monitoring-lean:
+    image: prom/prometheus:latest
+    container_name: smart-0dte-monitoring-lean
+    ports:
+      - "9091:9090"  # Different port to avoid conflicts
+    volumes:
+      - ./infrastructure/monitoring/prometheus-lean.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_lean_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=7d'  # Short retention for cost savings
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - smart-0dte-lean
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.1'
+
+volumes:
+  postgres_lean_data:
+    driver: local
+  redis_lean_data:
+    driver: local
+  lean_model_cache:
+    driver: local
+  prometheus_lean_data:
+    driver: local
+
+networks:
+  smart-0dte-lean:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+

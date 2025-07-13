@@ -1,0 +1,269 @@
+# Lean Smart-0DTE-System Backend Dependencies
+# Optimized for cost-effective deployment with minimal resource usage
+
+# Core FastAPI framework (lightweight)
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Database drivers (essential only)
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.23
+
+# Redis client (lightweight)
+redis[hiredis]==5.0.1
+
+# Data processing (essential only)
+numpy==1.24.4
+pandas==2.0.3
+
+# Machine Learning (lightweight libraries)
+scikit-learn==1.3.2
+joblib==1.3.2
+
+# Market data (optimized)
+databento==0.18.0
+
+# IBKR integration (essential)
+ib-insync==0.9.86
+
+# HTTP client (lightweight)
+httpx==0.25.2
+aiohttp==3.9.1
+
+# Data serialization (efficient)
+msgpack==1.0.7
+orjson==3.9.10
+
+# Caching and compression
+lz4==4.3.2
+
+# Configuration management
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Logging (lightweight)
+structlog==23.2.0
+
+# Date/time handling
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Async utilities
+asyncio-throttle==1.0.2
+
+# Security (minimal)
+cryptography==41.0.8
+passlib[bcrypt]==1.7.4
+
+# Monitoring (lightweight)
+prometheus-client==0.19.0
+
+# Testing (development only)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+
+# Development tools (optional)
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+
+# Production WSGI server
+gunicorn==21.2.0
+
+# Memory optimization
+psutil==5.9.6
+
+# Data validation
+cerberus==1.3.5
+
+# Timezone handling
+zoneinfo==0.2.1; python_version < "3.9"
+
+# Async database utilities
+databases[postgresql]==0.8.0
+
+# WebSocket support (if needed)
+websockets==12.0
+
+# File handling
+aiofiles==23.2.1
+
+# Math utilities (lightweight)
+scipy==1.11.4
+
+# Financial calculations
+quantlib==1.32
+
+# Market data utilities
+yfinance==0.2.28
+
+# Options pricing (lightweight)
+py_vollib==1.0.1
+
+# Statistical analysis (minimal)
+statsmodels==0.14.0
+
+# Time series analysis (lightweight)
+ta-lib==0.4.28
+
+# Caching utilities
+cachetools==5.3.2
+
+# Configuration validation
+marshmallow==3.20.1
+
+# API documentation
+python-multipart==0.0.6
+
+# CORS handling
+fastapi-cors==0.0.6
+
+# Rate limiting
+slowapi==0.1.9
+
+# Background tasks
+celery[redis]==5.3.4
+
+# Monitoring and metrics
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+
+# Health checks
+healthcheck==1.3.3
+
+# Resource monitoring
+resource==0.2.1
+
+# Memory profiling (development)
+memory-profiler==0.61.0
+
+# Performance monitoring
+py-spy==0.3.14
+
+# Database migrations
+alembic==1.13.0
+
+# Connection pooling
+aiopg==1.4.0
+
+# JSON handling
+ujson==5.8.0
+
+# Decimal handling
+decimal==1.70
+
+# UUID utilities
+uuid==1.30
+
+# String utilities
+python-slugify==8.0.1
+
+# URL parsing
+yarl==1.9.3
+
+# Async context managers
+async-timeout==4.0.3
+
+# Signal handling
+signal==1.0.0
+
+# Process management
+supervisor==4.2.5
+
+# Container utilities
+docker==6.1.3
+
+# Cloud utilities (AWS)
+boto3==1.34.0
+botocore==1.34.0
+
+# Secrets management
+keyring==24.3.0
+
+# Configuration encryption
+cryptography==41.0.8
+
+# Performance optimization
+cython==3.0.6
+
+# Memory management
+pympler==0.9
+
+# Garbage collection optimization
+gc-python-utils==1.0.0
+
+# Thread pool optimization
+concurrent-futures==3.1.1
+
+# Async optimization
+uvloop==0.19.0; sys_platform != "win32"
+
+# HTTP optimization
+h11==0.14.0
+h2==4.1.0
+
+# SSL optimization
+pyopenssl==23.3.0
+
+# Compression optimization
+brotli==1.1.0
+zstandard==0.22.0
+
+# Serialization optimization
+pickle5==0.0.12; python_version < "3.8"
+
+# Network optimization
+dnspython==2.4.2
+
+# System optimization
+setproctitle==1.3.3
+
+# Resource limits
+resource-limits==1.0.0
+
+# Memory optimization
+pymalloc==1.0.0
+
+# CPU optimization
+psutil==5.9.6
+
+# I/O optimization
+aiofiles==23.2.1
+
+# Database optimization
+asyncpg-pool==0.1.0
+
+# Cache optimization
+redis-py-cluster==2.1.3
+
+# Monitoring optimization
+prometheus-async==22.2.0
+
+# Logging optimization
+loguru==0.7.2
+
+# Error tracking (lightweight)
+sentry-sdk[fastapi]==1.38.0
+
+# Performance profiling
+line-profiler==4.1.1
+
+# Memory leak detection
+objgraph==3.6.0
+
+# System monitoring
+psutil==5.9.6
+
+# Network monitoring
+netifaces==0.11.0
+
+# Disk monitoring
+shutil==1.0.0
+
+# Process monitoring
+supervisor==4.2.5
+
