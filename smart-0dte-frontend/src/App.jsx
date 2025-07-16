@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import ConversationalAI from '@/components/ConversationalAI'
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   AreaChart, Area, BarChart, Bar, ScatterChart, Scatter, Cell
@@ -14,7 +15,7 @@ import {
 import { 
   TrendingUp, TrendingDown, Activity, DollarSign, Target, Shield, 
   Brain, Zap, AlertTriangle, CheckCircle, Clock, Settings,
-  BarChart3, PieChart, Gauge, Eye, Play, Pause, Square
+  BarChart3, PieChart, Gauge, Eye, Play, Pause, Square, MessageCircle
 } from 'lucide-react'
 import './App.css'
 
@@ -223,12 +224,16 @@ function App() {
 
       {/* Main Dashboard */}
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="signals">Signals</TabsTrigger>
           <TabsTrigger value="strategies">Strategies</TabsTrigger>
           <TabsTrigger value="options">Options</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
+          <TabsTrigger value="ai-assistant">
+            <MessageCircle className="h-4 w-4 mr-1" />
+            AI Assistant
+          </TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -538,6 +543,79 @@ function App() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* AI Assistant Tab */}
+        <TabsContent value="ai-assistant" className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2">
+              <ConversationalAI 
+                tradingData={{
+                  marketData: mockMarketData,
+                  vixData: mockVixData,
+                  signals: mockSignals,
+                  strategies: mockStrategies,
+                  correlations: mockCorrelationData
+                }}
+                onFeedback={(messageId, isPositive) => {
+                  console.log(`Feedback for message ${messageId}: ${isPositive ? 'positive' : 'negative'}`)
+                  // Here you would typically send feedback to your backend for learning
+                }}
+              />
+            </div>
+            
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center space-x-2">
+                    <Brain className="h-5 w-5" />
+                    <span>AI Insights</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-blue-50 rounded-lg">
+                      <div className="font-medium text-sm">Market Regime</div>
+                      <div className="text-xs text-muted-foreground">Low volatility environment detected</div>
+                    </div>
+                    <div className="p-3 bg-yellow-50 rounded-lg">
+                      <div className="font-medium text-sm">Correlation Alert</div>
+                      <div className="text-xs text-muted-foreground">SPY-QQQ correlation breakdown</div>
+                    </div>
+                    <div className="p-3 bg-green-50 rounded-lg">
+                      <div className="font-medium text-sm">Strategy Recommendation</div>
+                      <div className="text-xs text-muted-foreground">Mean reversion strategies favored</div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center space-x-2">
+                    <Target className="h-5 w-5" />
+                    <span>Quick Actions</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <Button variant="outline" size="sm" className="w-full justify-start">
+                      Analyze yesterday's performance
+                    </Button>
+                    <Button variant="outline" size="sm" className="w-full justify-start">
+                      Explain current signals
+                    </Button>
+                    <Button variant="outline" size="sm" className="w-full justify-start">
+                      Risk assessment
+                    </Button>
+                    <Button variant="outline" size="sm" className="w-full justify-start">
+                      Strategy optimization
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </TabsContent>
 
         {/* Settings Tab */}
