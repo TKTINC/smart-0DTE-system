@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
-import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
+import { Button } from './components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Progress } from './components/ui/progress';
+import { Separator } from './components/ui/separator';
+import { ScrollArea } from './components/ui/scroll-area';
 import ConversationalAI from './components/ConversationalAI';
 import AdvancedReporting from './components/AdvancedReporting';
+import MarketDataDashboard from './components/MarketDataDashboard';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   AreaChart, Area, BarChart, Bar, ScatterChart, Scatter, Cell
@@ -120,14 +123,15 @@ function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="signals">Signals</TabsTrigger>
-            <TabsTrigger value="strategies">Strategies</TabsTrigger>
-            <TabsTrigger value="options">Options</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-            <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
-          </TabsList>
+        <TabsList className="grid w-full grid-cols-7">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="signals">Signals</TabsTrigger>
+          <TabsTrigger value="strategies">Strategies</TabsTrigger>
+          <TabsTrigger value="options">Options</TabsTrigger>
+          <TabsTrigger value="market-data">Market Data</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+          <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
+        </TabsList>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
@@ -307,7 +311,12 @@ function App() {
             </Card>
           </TabsContent>
 
-          {/* Analytics Tab - Now using AdvancedReporting */}
+          {/* Market Data Tab */}
+          <TabsContent value="market-data" className="space-y-4">
+            <MarketDataDashboard />
+          </TabsContent>
+
+          {/* Analytics Tab */}
           <TabsContent value="analytics" className="space-y-4">
             <AdvancedReporting />
           </TabsContent>
