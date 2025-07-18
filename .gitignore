@@ -22,3 +22,4 @@ logs/
 .idea/
 *.swp
 *.swo
+smart-0dte-frontend/node_modules/
