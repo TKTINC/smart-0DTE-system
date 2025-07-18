@@ -1,15 +1,777 @@
-# Smart-0DTE-System: AWS Cloud Provisioning Guide
+# Smart-0DTE-System: AWS Cloud Provisioning Guide (Single Environment PoC)
 
 **Author**: Manus AI  
-**Date**: January 16, 2025  
-**Version**: 1.0  
+**Date**: July 17, 2025  
+**Version**: 2.0 (Updated for Single Environment PoC Strategy)  
 **Document Type**: Cloud Infrastructure Setup Guide
 
-## Overview
+## 🎯 Overview
 
-This comprehensive guide provides step-by-step instructions for provisioning and configuring Amazon Web Services (AWS) infrastructure to host the Smart-0DTE-System in a production-ready cloud environment. The guide is designed for beginners and provides detailed explanations of each step, service configuration, and best practices for secure and scalable deployment.
+This guide provides step-by-step instructions for provisioning Amazon Web Services (AWS) infrastructure to host the Smart-0DTE-System in a **single, flexible environment** perfect for a 90-day Proof of Concept period. This approach is cost-effective, simple to manage, and allows for development, testing, and live trading all in one environment.
 
-The Smart-0DTE-System requires a robust cloud infrastructure capable of handling real-time market data processing, high-frequency trading operations, and comprehensive data storage and analytics. This guide covers all necessary AWS services including compute instances, managed databases, networking, security, monitoring, and cost optimization strategies.
+### **Why Single Environment for PoC?**
+- **66% Cost Savings**: ~$200/month vs $580/month for multi-environment
+- **Simplicity**: One environment to manage and monitor
+- **Flexibility**: Switch between development, testing, and live trading modes
+- **Speed**: Faster deployment and iteration cycles
+- **Real Trading**: Connect to live IBKR and Polygon APIs immediately
+
+## 📋 Table of Contents
+
+1. [AWS Account Setup and Initial Configuration](#aws-account-setup-and-initial-configuration)
+2. [Identity and Access Management (IAM) Configuration](#identity-and-access-management-iam-configuration)
+3. [Single Environment Network Architecture](#single-environment-network-architecture)
+4. [Database and Cache Infrastructure](#database-and-cache-infrastructure)
+5. [Compute Infrastructure Setup](#compute-infrastructure-setup)
+6. [Load Balancing and SSL Configuration](#load-balancing-and-ssl-configuration)
+7. [Monitoring and Logging Setup](#monitoring-and-logging-setup)
+8. [Security Configuration](#security-configuration)
+9. [Cost Optimization and Management](#cost-optimization-and-management)
+10. [Single Environment Deployment](#single-environment-deployment)
+
+---
+
+## AWS Account Setup and Initial Configuration
+
+### Creating Your AWS Account
+
+Setting up an AWS account is the first step in deploying the Smart-0DTE-System to the cloud. For a PoC environment, we'll focus on essential configurations that provide security and cost control while maintaining simplicity.
+
+**Account Registration Process**
+
+1. Visit [aws.amazon.com](https://aws.amazon.com) and click "Create an AWS Account"
+2. Use a dedicated email address: `aws-admin@your-domain.com`
+3. Account name: "Smart-0DTE-Trading-System-PoC"
+4. Provide valid phone number and credit card for verification
+
+**Initial Security Configuration**
+
+Immediately after account creation, enable multi-factor authentication (MFA) on your root account:
+
+```bash
+# After installing AWS CLI
+aws iam enable-mfa-device \
+  --user-name root \
+  --serial-number arn:aws:iam::ACCOUNT-ID:mfa/root-account-mfa-device \
+  --authentication-code1 123456 \
+  --authentication-code2 789012
+```
+
+**Billing Alerts Setup**
+
+Set up billing alerts to monitor costs during your PoC:
+
+```bash
+# Create billing alarm for PoC cost control
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Smart-0DTE-PoC-Billing-Alert" \
+  --alarm-description "Alert when monthly bill exceeds $300" \
+  --metric-name EstimatedCharges \
+  --namespace AWS/Billing \
+  --statistic Maximum \
+  --period 86400 \
+  --threshold 300 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=Currency,Value=USD \
+  --evaluation-periods 1
+```
+
+### Prerequisites Installation
+
+Install the necessary tools on your local machine:
+
+```bash
+# Install AWS CLI
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+# Install Terraform
+wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install terraform
+
+# Configure AWS credentials
+aws configure
+```
+
+When prompted, enter:
+- AWS Access Key ID: [Your access key]
+- AWS Secret Access Key: [Your secret key]
+- Default region name: us-east-1
+- Default output format: json
+
+---
+
+## Identity and Access Management (IAM) Configuration
+
+### Create IAM User for PoC
+
+Create a dedicated IAM user for your PoC deployment:
+
+```bash
+# Create PoC user
+aws iam create-user --user-name smart-0dte-poc-user
+
+# Create and attach policy
+cat > poc-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "rds:*",
+        "elasticache:*",
+        "iam:*",
+        "cloudwatch:*",
+        "logs:*",
+        "s3:*",
+        "route53:*",
+        "acm:*",
+        "elasticloadbalancing:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+
+aws iam create-policy --policy-name Smart0DTEPoCPolicy --policy-document file://poc-policy.json
+aws iam attach-user-policy --user-name smart-0dte-poc-user --policy-arn arn:aws:iam::ACCOUNT-ID:policy/Smart0DTEPoCPolicy
+
+# Create access keys
+aws iam create-access-key --user-name smart-0dte-poc-user
+```
+
+### Create SSH Key Pair
+
+Create an SSH key pair for EC2 access:
+
+```bash
+# Generate SSH key pair
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/smart-0dte-poc-key
+
+# Upload public key to AWS
+aws ec2 import-key-pair \
+  --key-name smart-0dte-poc-key \
+  --public-key-material fileb://~/.ssh/smart-0dte-poc-key.pub
+```
+
+---
+
+## Single Environment Network Architecture
+
+### VPC Configuration
+
+The single environment uses a simple but secure VPC configuration:
+
+```hcl
+# terraform/main.tf
+resource "aws_vpc" "poc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name        = "smart-0dte-poc-vpc"
+    Environment = "poc"
+    Project     = "smart-0dte-system"
+  }
+}
+
+# Public subnet for load balancer
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.poc.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name        = "smart-0dte-poc-public-subnet"
+    Environment = "poc"
+  }
+}
+
+# Private subnet for application
+resource "aws_subnet" "private" {
+  vpc_id            = aws_vpc.poc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = data.aws_availability_zones.available.names[0]
+
+  tags = {
+    Name        = "smart-0dte-poc-private-subnet"
+    Environment = "poc"
+  }
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "poc" {
+  vpc_id = aws_vpc.poc.id
+
+  tags = {
+    Name        = "smart-0dte-poc-igw"
+    Environment = "poc"
+  }
+}
+
+# NAT Gateway for private subnet
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  
+  tags = {
+    Name        = "smart-0dte-poc-nat-eip"
+    Environment = "poc"
+  }
+}
+
+resource "aws_nat_gateway" "poc" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name        = "smart-0dte-poc-nat-gateway"
+    Environment = "poc"
+  }
+}
+```
+
+---
+
+## Database and Cache Infrastructure
+
+### PostgreSQL Database Configuration
+
+Single shared database for both systems:
+
+```hcl
+# terraform/database.tf
+resource "aws_db_subnet_group" "poc" {
+  name       = "smart-0dte-poc-subnet-group"
+  subnet_ids = [aws_subnet.private.id, aws_subnet.private_b.id]
+
+  tags = {
+    Name        = "smart-0dte-poc-db-subnet-group"
+    Environment = "poc"
+  }
+}
+
+resource "aws_db_instance" "postgres" {
+  identifier = "smart-0dte-poc-postgres"
+
+  # Engine configuration
+  engine         = "postgres"
+  engine_version = "15.4"
+  instance_class = "db.t3.small"
+
+  # Storage configuration
+  allocated_storage     = 50
+  max_allocated_storage = 200
+  storage_type          = "gp3"
+  storage_encrypted     = true
+
+  # Database configuration
+  db_name  = "smart_0dte_poc"
+  username = var.db_username
+  password = var.db_password
+
+  # Network configuration
+  db_subnet_group_name   = aws_db_subnet_group.poc.name
+  vpc_security_group_ids = [aws_security_group.database.id]
+
+  # PoC-optimized backup configuration
+  backup_retention_period = 3
+  backup_window          = "03:00-04:00"
+  maintenance_window     = "sun:04:00-sun:05:00"
+
+  # Cost optimization for PoC
+  skip_final_snapshot = false
+  final_snapshot_identifier = "smart-0dte-poc-final-snapshot"
+  deletion_protection = false
+
+  tags = {
+    Name        = "smart-0dte-poc-postgres"
+    Environment = "poc"
+    Project     = "smart-0dte-system"
+  }
+}
+```
+
+### Redis Cache Configuration
+
+```hcl
+# terraform/cache.tf
+resource "aws_elasticache_subnet_group" "poc" {
+  name       = "smart-0dte-poc-cache-subnet-group"
+  subnet_ids = [aws_subnet.private.id, aws_subnet.private_b.id]
+}
+
+resource "aws_elasticache_replication_group" "redis" {
+  replication_group_id       = "smart-0dte-poc-redis"
+  description                = "Redis cluster for Smart-0DTE PoC"
+  
+  node_type                  = "cache.t3.micro"
+  port                       = 6379
+  parameter_group_name       = "default.redis7"
+  
+  num_cache_clusters         = 1
+  
+  subnet_group_name          = aws_elasticache_subnet_group.poc.name
+  security_group_ids         = [aws_security_group.cache.id]
+  
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = false  # Simplified for PoC
+  
+  tags = {
+    Name        = "smart-0dte-poc-redis"
+    Environment = "poc"
+    Project     = "smart-0dte-system"
+  }
+}
+```
+
+---
+
+## Compute Infrastructure Setup
+
+### Single Powerful EC2 Instance
+
+```hcl
+# terraform/compute.tf
+resource "aws_instance" "app" {
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = "t3.xlarge"  # Powerful enough for both systems
+  key_name      = var.key_pair_name
+
+  subnet_id                   = aws_subnet.private.id
+  vpc_security_group_ids      = [aws_security_group.app.id]
+  associate_public_ip_address = false
+
+  # User data for application setup
+  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
+    environment = "poc"
+    db_host     = aws_db_instance.postgres.endpoint
+    redis_host  = aws_elasticache_replication_group.redis.primary_endpoint_address
+  }))
+
+  # Enhanced monitoring for PoC
+  monitoring = true
+
+  # EBS optimization
+  ebs_optimized = true
+
+  root_block_device {
+    volume_size = 100
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
+  tags = {
+    Name        = "smart-0dte-poc-app-server"
+    Environment = "poc"
+    Project     = "smart-0dte-system"
+  }
+}
+```
+
+### User Data Script
+
+```bash
+# terraform/user_data.sh
+#!/bin/bash
+
+# Update system
+yum update -y
+
+# Install Docker
+amazon-linux-extras install docker -y
+systemctl start docker
+systemctl enable docker
+usermod -a -G docker ec2-user
+
+# Install Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Install Git
+yum install -y git
+
+# Clone repositories
+cd /opt
+git clone https://github.com/TKTINC/smart-0DTE-system.git
+git clone https://github.com/TKTINC/mag7-7DTE-system.git
+
+# Set up environment variables
+cat > /opt/smart-0DTE-system/.env << EOF
+# Database configuration
+DATABASE_HOST=${db_host}
+DATABASE_PORT=5432
+DATABASE_NAME=smart_0dte_poc
+DATABASE_USER=postgres
+DATABASE_PASSWORD=${db_password}
+
+# Redis configuration
+REDIS_HOST=${redis_host}
+REDIS_PORT=6379
+REDIS_DB=0
+
+# Trading configuration
+TRADING_MODE=development
+PAPER_TRADING=true
+LOG_LEVEL=debug
+
+# API Keys (replace with actual keys)
+POLYGON_API_KEY=your_polygon_api_key
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_api_key
+OPENAI_API_KEY=your_openai_api_key
+IBKR_USERNAME=your_ibkr_username
+IBKR_PASSWORD=your_ibkr_password
+EOF
+
+# Copy environment file to Mag7 system
+cp /opt/smart-0DTE-system/.env /opt/mag7-7DTE-system/.env
+
+# Update Redis DB for Mag7 system
+sed -i 's/REDIS_DB=0/REDIS_DB=8/' /opt/mag7-7DTE-system/.env
+
+# Start applications
+cd /opt/smart-0DTE-system
+docker-compose up -d
+
+cd /opt/mag7-7DTE-system
+docker-compose up -d
+
+# Create mode switching script
+cat > /opt/switch-mode.sh << 'SCRIPT_EOF'
+#!/bin/bash
+
+MODE=$1
+
+if [ -z "$MODE" ]; then
+    echo "Usage: ./switch-mode.sh <development|testing|live>"
+    exit 1
+fi
+
+case $MODE in
+    "development"|"dev")
+        echo "🔧 Switching to DEVELOPMENT mode..."
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=development/' /opt/smart-0DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=true/' /opt/smart-0DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/smart-0DTE-system/.env
+        
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=development/' /opt/mag7-7DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=true/' /opt/mag7-7DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/mag7-7DTE-system/.env
+        ;;
+    "testing"|"test")
+        echo "🧪 Switching to TESTING mode..."
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=testing/' /opt/smart-0DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=true/' /opt/smart-0DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=info/' /opt/smart-0DTE-system/.env
+        
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=testing/' /opt/mag7-7DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=true/' /opt/mag7-7DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=info/' /opt/mag7-7DTE-system/.env
+        ;;
+    "live"|"production"|"prod")
+        echo "🚨 Switching to LIVE TRADING mode..."
+        echo "⚠️  WARNING: This will enable live trading with real money!"
+        read -p "Are you sure? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "❌ Live trading cancelled"
+            exit 0
+        fi
+        
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=production/' /opt/smart-0DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=false/' /opt/smart-0DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=warning/' /opt/smart-0DTE-system/.env
+        
+        sed -i 's/TRADING_MODE=.*/TRADING_MODE=production/' /opt/mag7-7DTE-system/.env
+        sed -i 's/PAPER_TRADING=.*/PAPER_TRADING=false/' /opt/mag7-7DTE-system/.env
+        sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=warning/' /opt/mag7-7DTE-system/.env
+        ;;
+esac
+
+# Restart services
+cd /opt/smart-0DTE-system && docker-compose down && docker-compose up -d
+cd /opt/mag7-7DTE-system && docker-compose down && docker-compose up -d
+
+echo "✅ Mode switch complete!"
+SCRIPT_EOF
+
+chmod +x /opt/switch-mode.sh
+
+# Signal completion
+/opt/aws/bin/cfn-signal -e $? --stack "${AWS::StackName}" --resource AutoScalingGroup --region "${AWS::Region}" || true
+```
+
+---
+
+## Single Environment Deployment
+
+### Quick Deployment
+
+After completing the AWS account setup, deploy your single PoC environment:
+
+```bash
+# Clone repositories
+git clone https://github.com/TKTINC/smart-0DTE-system.git
+git clone https://github.com/TKTINC/mag7-7DTE-system.git
+
+# Deploy single environment with both systems
+./deploy-single-environment.sh poc both
+```
+
+### Expected Deployment Time
+
+- **Initial deployment**: 15-20 minutes
+- **Application startup**: 5-10 minutes
+- **Total time to trading**: 25-30 minutes
+
+### Post-Deployment Verification
+
+```bash
+# Check deployment status
+terraform show
+
+# Get application URLs
+terraform output load_balancer_url
+
+# SSH into instance
+ssh -i ~/.ssh/smart-0dte-poc-key.pem ec2-user@$(terraform output -raw instance_public_ip)
+
+# Check applications
+docker-compose ps
+curl http://localhost:8000/health  # Smart-0DTE
+curl http://localhost:8001/health  # Mag7-7DTE
+```
+
+---
+
+## Cost Optimization and Management
+
+### Monthly Cost Breakdown
+
+```
+Single PoC Environment: ~$200/month
+├── EC2 t3.xlarge: $150/month
+├── RDS db.t3.small: $25/month
+├── ElastiCache t3.micro: $15/month
+└── Storage & Networking: $10/month
+
+vs Multi-Environment: ~$580/month
+Savings: $380/month (66% reduction)
+```
+
+### Cost Monitoring
+
+```bash
+# Set up cost alerts
+aws budgets create-budget \
+  --account-id $(aws sts get-caller-identity --query Account --output text) \
+  --budget '{
+    "BudgetName": "Smart-0DTE-PoC-Budget",
+    "BudgetLimit": {
+      "Amount": "250",
+      "Unit": "USD"
+    },
+    "TimeUnit": "MONTHLY",
+    "BudgetType": "COST"
+  }'
+```
+
+### Cost Optimization Tips
+
+1. **Stop instances during non-trading hours** (if not running 24/7)
+2. **Use spot instances** for development work (50-70% savings)
+3. **Monitor data transfer costs** with CloudWatch
+4. **Set up billing alerts** at $100, $200, and $300 thresholds
+
+---
+
+## Security Configuration
+
+### Security Groups
+
+```hcl
+# Application security group
+resource "aws_security_group" "app" {
+  name_prefix = "smart-0dte-poc-app-"
+  vpc_id      = aws_vpc.poc.id
+
+  # SSH access (restrict to your IP)
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]  # Replace with your IP
+  }
+
+  # Application ports
+  ingress {
+    from_port       = 8000
+    to_port         = 8001
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  # Frontend ports
+  ingress {
+    from_port       = 3000
+    to_port         = 3001
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "smart-0dte-poc-app-sg"
+    Environment = "poc"
+  }
+}
+```
+
+---
+
+## Monitoring and Logging Setup
+
+### CloudWatch Configuration
+
+```hcl
+# CloudWatch dashboard
+resource "aws_cloudwatch_dashboard" "poc" {
+  dashboard_name = "Smart-0DTE-PoC-Dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+
+        properties = {
+          metrics = [
+            ["AWS/EC2", "CPUUtilization", "InstanceId", aws_instance.app.id],
+            [".", "NetworkIn", ".", "."],
+            [".", "NetworkOut", ".", "."]
+          ]
+          period = 300
+          stat   = "Average"
+          region = var.aws_region
+          title  = "EC2 Instance Metrics"
+        }
+      }
+    ]
+  })
+}
+```
+
+---
+
+## Next Steps After Deployment
+
+### Immediate Actions (Day 1)
+
+1. **SSH into your instance** and verify both applications are running
+2. **Configure your API keys** in the environment files
+3. **Test paper trading** functionality
+4. **Set up monitoring alerts**
+
+### Week 1-2: Setup and Integration
+
+1. **Connect live APIs** (Polygon, Alpha Vantage, OpenAI)
+2. **Configure IBKR connection** for paper trading
+3. **Test all system functionality**
+4. **Monitor performance and costs**
+
+### Week 3-4: Validation
+
+1. **Run paper trading** with real market data
+2. **Validate trading strategies** and signals
+3. **Performance testing** under market conditions
+4. **Fine-tune configurations**
+
+### Week 5-8: Live Trading
+
+1. **Switch to live trading mode**: `./switch-mode.sh live`
+2. **Start with small positions**
+3. **Monitor performance closely**
+4. **Scale up gradually**
+
+### Week 9-12: Optimization
+
+1. **Optimize performance** based on real trading data
+2. **Scale resources** if needed
+3. **Plan for production scaling**
+4. **Document lessons learned**
+
+---
+
+## Support and Troubleshooting
+
+### Common Issues
+
+#### **Deployment Failures**
+```bash
+# Check Terraform state
+terraform show
+
+# Retry deployment
+terraform plan -var-file="poc.tfvars"
+terraform apply -var-file="poc.tfvars"
+```
+
+#### **Application Issues**
+```bash
+# SSH into instance
+ssh -i ~/.ssh/smart-0dte-poc-key.pem ec2-user@INSTANCE-IP
+
+# Check application logs
+docker-compose logs -f backend
+
+# Restart applications
+docker-compose down && docker-compose up -d
+```
+
+#### **Database Connection Issues**
+```bash
+# Test database connectivity
+psql -h DATABASE-ENDPOINT -U postgres -d smart_0dte_poc
+
+# Check security groups
+aws ec2 describe-security-groups --group-ids sg-xxxxxxxxx
+```
+
+### Getting Help
+
+- **AWS Documentation**: [docs.aws.amazon.com](https://docs.aws.amazon.com)
+- **Terraform Documentation**: [terraform.io/docs](https://terraform.io/docs)
+- **System Documentation**: Check the docs/ folder in each repository
+
+---
+
+## Summary
+
+This single environment approach provides:
+
+✅ **Cost-effective PoC deployment** (~$200/month vs $580/month)  
+✅ **Simple management** with one environment  
+✅ **Flexible operation** modes (dev/test/live)  
+✅ **Real trading capability** from day one  
+✅ **Easy scaling** when needed  
+✅ **Future migration path** to multi-environment  
+
+**Ready to deploy? Run: `./deploy-single-environment.sh poc both`**
 
 ## Table of Contents
 

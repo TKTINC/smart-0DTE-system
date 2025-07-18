@@ -1,13 +1,56 @@
-# Smart-0DTE-System Local Development Deployment Guide
+# Smart-0DTE-System Deployment Guide
 
 **Author**: Manus AI  
-**Date**: July 16, 2025  
-**Version**: 1.0  
-**Document Type**: Step-by-Step Deployment Guide
+**Date**: July 17, 2025  
+**Version**: 2.0 (Updated for Multi-Environment Strategy)  
+**Document Type**: Deployment Options Guide
 
-## Overview
+## 🎯 Overview
 
-This comprehensive guide provides detailed instructions for setting up and deploying the Smart-0DTE-System on a local development environment. The guide covers all necessary prerequisites, installation procedures, configuration steps, and testing protocols to ensure a fully functional development environment.
+This guide provides deployment options for the Smart-0DTE-System. We now recommend **cloud-based development** for production parity, but local deployment remains available for quick testing and offline development.
+
+## 🚀 **RECOMMENDED: Cloud Development Environment**
+
+For the best development experience with production parity, we recommend using our cloud-based development environment:
+
+### **Why Cloud Development?**
+- ✅ **Production Parity**: Identical infrastructure to production
+- ✅ **Real Market Data**: Access to live data feeds and APIs
+- ✅ **Scalable Resources**: Professional-grade compute and storage
+- ✅ **Team Collaboration**: Shared development environment
+- ✅ **Cost Effective**: Shared resources reduce costs by 60-70%
+
+### **Quick Start: Cloud Development**
+```bash
+# Deploy cloud development environment
+./deploy-environment.sh dev both
+
+# Access your cloud development environment
+ssh -i your-key.pem ec2-user@dev-smart-0dte.your-domain.com
+```
+
+**📖 For detailed cloud deployment instructions, see:**
+- [AWS Cloud Provisioning Guide](./AWS-CLOUD-PROVISIONING-GUIDE-UPDATED.md)
+- [Multi-Environment Deployment Guide](./MULTI-ENVIRONMENT-DEPLOYMENT-GUIDE.md)
+
+---
+
+## 💻 Local Development Deployment (Alternative)
+
+Local deployment is still available for quick testing, offline development, or when cloud resources are not available.
+
+### **When to Use Local Deployment**
+- Quick proof-of-concept testing
+- Offline development scenarios
+- Learning and experimentation
+- Limited internet connectivity situations
+
+### **Limitations of Local Deployment**
+- ⚠️ No production parity
+- ⚠️ Limited to demo/mock data
+- ⚠️ Resource constraints on local machine
+- ⚠️ No real market data access
+- ⚠️ Different performance characteristics
 
 ## Prerequisites and System Requirements
 
