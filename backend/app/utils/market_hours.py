@@ -6,7 +6,7 @@ holiday handling, and extended hours trading.
 """
 
 import logging
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timezone, timedelta
 from typing import Dict, Optional, Tuple
 import pytz
 from pandas.tseries.holiday import USFederalHolidayCalendar
