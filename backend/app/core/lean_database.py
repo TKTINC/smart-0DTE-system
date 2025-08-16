@@ -431,10 +431,16 @@ class LeanDatabaseManager:
                 
                 await session.commit()
                 
-                # Vacuum tables to reclaim space
-                await session.execute(text("VACUUM ANALYZE lean_market_data"))
-                await session.execute(text("VACUUM ANALYZE lean_options_data"))
-                await session.execute(text("VACUUM ANALYZE lean_signal_data"))
+                # Vacuum tables to reclaim space (requires autocommit)
+                # Note: VACUUM cannot run inside a transaction block
+                await session.close()
+                
+                # Create new connection with autocommit for VACUUM
+                engine = self.get_engine()
+                async with engine.connect() as conn:
+                    await conn.execute(text("VACUUM ANALYZE lean_market_data"))
+                    await conn.execute(text("VACUUM ANALYZE lean_options_data"))
+                    await conn.execute(text("VACUUM ANALYZE lean_signal_data"))
                 
                 logger.info("Completed data cleanup and vacuum")
                 

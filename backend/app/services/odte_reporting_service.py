@@ -3,8 +3,8 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.services.reporting_service import ReportingService
 from app.models.reporting import Report, ReportType, MarketCondition, SignalFactor
@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 class ODTEReportingService(ReportingService):
     """Reporting service for 0DTE system."""
+    
+    def __init__(self, db: AsyncSession):
+        """Initialize with async database session."""
+        self.db = db
     
     async def _generate_report_data(self, date: datetime.date, portfolio_id: int) -> Dict[str, Any]:
         """Generate report data for 0DTE system."""
@@ -37,14 +41,20 @@ class ODTEReportingService(ReportingService):
     async def _generate_daily_summary(self, date: datetime.date, portfolio_id: int) -> Dict[str, Any]:
         """Generate daily summary section for 0DTE system."""
         # Get portfolio data
-        portfolio = self.db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+        result = await self.db.execute(
+            select(Portfolio).where(Portfolio.id == portfolio_id)
+        )
+        portfolio = result.scalar_one_or_none()
         
         # Get daily performance
         previous_day = date - timedelta(days=1)
-        previous_portfolio = self.db.query(Portfolio).filter(
-            Portfolio.id == portfolio_id,
-            Portfolio.as_of_date == previous_day
-        ).first()
+        result = await self.db.execute(
+            select(Portfolio).where(
+                Portfolio.id == portfolio_id,
+                Portfolio.as_of_date == previous_day
+            )
+        )
+        previous_portfolio = result.scalar_one_or_none()
         
         start_value = previous_portfolio.total_value if previous_portfolio else portfolio.initial_value
         end_value = portfolio.total_value
@@ -52,36 +62,49 @@ class ODTEReportingService(ReportingService):
         daily_pnl_pct = (daily_pnl / start_value) * 100 if start_value > 0 else 0
         
         # Get trade counts
-        trades = self.db.query(Trade).filter(
-            Trade.portfolio_id == portfolio_id,
-            Trade.execution_time >= datetime.combine(date, datetime.min.time()),
-            Trade.execution_time < datetime.combine(date + timedelta(days=1), datetime.min.time())
-        ).all()
+        result = await self.db.execute(
+            select(Trade).where(
+                Trade.portfolio_id == portfolio_id,
+                Trade.execution_time >= datetime.combine(date, datetime.min.time()),
+                Trade.execution_time < datetime.combine(date + timedelta(days=1), datetime.min.time())
+            )
+        )
+        trades = result.scalars().all()
         
         entry_trades = [t for t in trades if t.trade_type == "entry"]
         exit_trades = [t for t in trades if t.trade_type == "exit"]
         
         # Get signal counts
-        signals = self.db.query(Signal).filter(
-            Signal.generation_time >= datetime.combine(date, datetime.min.time()),
-            Signal.generation_time < datetime.combine(date + timedelta(days=1), datetime.min.time())
-        ).all()
+        result = await self.db.execute(
+            select(Signal).where(
+                Signal.generation_time >= datetime.combine(date, datetime.min.time()),
+                Signal.generation_time < datetime.combine(date + timedelta(days=1), datetime.min.time())
+            )
+        )
+        signals = result.scalars().all()
         
         # Market context
-        market_data = self.db.query(MarketData).filter(
-            MarketData.symbol == "SPY",
-            MarketData.date == date
-        ).first()
+        result = await self.db.execute(
+            select(MarketData).where(
+                MarketData.symbol == "SPY",
+                MarketData.date == date
+            )
+        )
+        market_data = result.scalar_one_or_none()
         
-        vix_data = self.db.query(MarketData).filter(
-            MarketData.symbol == "VIX",
-            MarketData.date == date
-        ).first()
+        result = await self.db.execute(
+            select(MarketData).where(
+                MarketData.symbol == "VIX",
+                MarketData.date == date
+            )
+        )
+        vix_data = result.scalar_one_or_none()
         
         # Get market condition
-        market_condition = self.db.query(MarketCondition).filter(
-            MarketCondition.date == date
-        ).first()
+        result = await self.db.execute(
+            select(MarketCondition).where(MarketCondition.date == date)
+        )
+        market_condition = result.scalar_one_or_none()
         
         return {
             "date": date.strftime("%Y-%m-%d"),

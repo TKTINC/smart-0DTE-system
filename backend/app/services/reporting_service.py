@@ -35,12 +35,15 @@ class ReportingService:
             date = datetime.utcnow().date()
         
         # Check if report already exists
-        existing_report = self.db.query(Report).filter(
-            Report.portfolio_id == portfolio_id,
-            Report.report_type == ReportType.DAILY,
-            Report.start_date == date,
-            Report.end_date == date
-        ).first()
+        result = await self.db.execute(
+            select(Report).where(
+                Report.portfolio_id == portfolio_id,
+                Report.report_type == ReportType.DAILY,
+                Report.start_date == date,
+                Report.end_date == date
+            )
+        )
+        existing_report = result.scalar_one_or_none()
         
         if existing_report:
             logger.info(f"Daily report for {date} already exists, returning existing report")
@@ -283,12 +286,15 @@ class ReportingService:
     
     async def get_report_by_date(self, date: datetime.date, portfolio_id: int = 1) -> Optional[Dict[str, Any]]:
         """Get report for a specific date."""
-        report = self.db.query(Report).filter(
-            Report.portfolio_id == portfolio_id,
-            Report.report_type == ReportType.DAILY,
-            Report.start_date == date,
-            Report.end_date == date
-        ).first()
+        result = await self.db.execute(
+            select(Report).where(
+                Report.portfolio_id == portfolio_id,
+                Report.report_type == ReportType.DAILY,
+                Report.start_date == date,
+                Report.end_date == date
+            )
+        )
+        report = result.scalar_one_or_none()
         
         if not report:
             return None
@@ -297,12 +303,15 @@ class ReportingService:
     
     async def get_report_pdf_path(self, date: datetime.date, portfolio_id: int = 1) -> Optional[str]:
         """Get PDF path for a report on a specific date."""
-        report = self.db.query(Report).filter(
-            Report.portfolio_id == portfolio_id,
-            Report.report_type == ReportType.DAILY,
-            Report.start_date == date,
-            Report.end_date == date
-        ).first()
+        result = await self.db.execute(
+            select(Report).where(
+                Report.portfolio_id == portfolio_id,
+                Report.report_type == ReportType.DAILY,
+                Report.start_date == date,
+                Report.end_date == date
+            )
+        )
+        report = result.scalar_one_or_none()
         
         if not report or not report.pdf_path:
             return None

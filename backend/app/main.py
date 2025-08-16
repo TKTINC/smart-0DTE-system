@@ -22,6 +22,7 @@ from app.core.redis_client import init_redis
 from app.core.influxdb_client import init_influxdb
 from app.core.logging_config import setup_logging
 from app.api.v1.api import api_router
+from app.api.v1.readiness import router as readiness_router
 from app.services.market_data_service import MarketDataService
 from app.services.signal_service import SignalService
 from app.services.risk_service import RiskService
@@ -142,6 +143,7 @@ async def log_requests(request: Request, call_next):
 
 # Include API routers
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(readiness_router)  # No prefix for /readyz and /livez
 
 # Health check endpoint
 @app.get("/health")

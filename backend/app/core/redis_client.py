@@ -7,7 +7,11 @@ and pub/sub messaging for the Smart-0DTE-System.
 
 import json
 import logging
-import msgpack
+try:
+    import msgpack
+    HAS_MSGPACK = True
+except ImportError:
+    HAS_MSGPACK = False
 import gzip
 from typing import Any, Dict, List, Optional, Union
 import redis.asyncio as redis
@@ -66,19 +70,25 @@ async def close_redis() -> None:
 def _serialize_data(data: Any) -> bytes:
     """Serialize data using msgpack and gzip compression."""
     try:
-        packed = msgpack.packb(data, use_bin_type=True)
+        if HAS_MSGPACK:
+            packed = msgpack.packb(data, use_bin_type=True)
+        else:
+            # Fallback to JSON if msgpack not available
+            packed = json.dumps(data).encode('utf-8')
         return gzip.compress(packed)
     except Exception:
         # Fallback to JSON if msgpack fails
-        json_data = json.dumps(data, default=str).encode('utf-8')
+        json_data = json.dumps(data).encode('utf-8')
         return gzip.compress(json_data)
-
 
 def _deserialize_data(data: bytes) -> Any:
     """Deserialize data from msgpack and gzip."""
     try:
         decompressed = gzip.decompress(data)
-        return msgpack.unpackb(decompressed, raw=False)
+        if HAS_MSGPACK:
+            return msgpack.unpackb(decompressed, raw=False)
+        else:
+            return json.loads(decompressed.decode('utf-8'))
     except Exception:
         # Fallback to JSON
         decompressed = gzip.decompress(data)
