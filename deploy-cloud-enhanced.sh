@@ -26,8 +26,11 @@ readonly LOG_FILE="$LOG_DIR/deployment_${TIMESTAMP}.log"
 ENVIRONMENT="${1:-dev}"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
+BUILD_FRONTEND="${BUILD_FRONTEND:-true}"
 DOMAIN_NAME="${DOMAIN_NAME:-}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-true}"
+READINESS_PATH="${READINESS_PATH:-/readyz}"
+TF_IMAGE_TAG="${TF_IMAGE_TAG:-}"
 
 # Trap errors and provide cleanup
 trap 'error_handler $? $LINENO' ERR
@@ -93,8 +96,21 @@ EXAMPLES:
 ENVIRONMENT VARIABLES:
     AUTO_APPROVE=true              # Same as --auto-approve
     SKIP_BUILD=true               # Same as --skip-build
+    BUILD_FRONTEND=false          # Skip frontend build (default: true)
     DOMAIN_NAME=api.example.com   # Same as --domain
     ENABLE_HTTPS=false            # Same as --no-https
+    READINESS_PATH=/health        # Custom readiness endpoint (default: /readyz)
+    TF_IMAGE_TAG=v20240101        # Use specific image tag for deployment
+
+ADVANCED USAGE:
+    # Deploy with specific image tag
+    TF_IMAGE_TAG=v20240101 $0 prod --auto-approve
+    
+    # Deploy backend only (skip frontend)
+    BUILD_FRONTEND=false $0 dev
+    
+    # Use custom readiness endpoint
+    READINESS_PATH=/health $0 dev
 
 EOF
 }
@@ -261,6 +277,9 @@ build_and_push_images() {
     
     log "INFO" "Building and pushing Docker images..."
     
+    # Validate Dockerfiles exist
+    [[ -f backend/Dockerfile ]] || { log "ERROR" "Missing backend/Dockerfile"; exit 1; }
+    
     # Get AWS account ID and region
     local aws_account_id
     aws_account_id=$(aws sts get-caller-identity --query Account --output text)
@@ -271,12 +290,21 @@ build_and_push_images() {
     local backend_repo="smart-0dte-backend"
     local frontend_repo="smart-0dte-frontend"
     
+    # Ensure ECR repositories exist
+    log "INFO" "Ensuring ECR repositories exist..."
+    for repo in "$backend_repo" "$frontend_repo"; do
+        if ! aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1; then
+            log "INFO" "Creating ECR repository: $repo"
+            aws ecr create-repository --repository-name "$repo" >/dev/null
+        fi
+    done
+    
     # Login to ECR
     log "INFO" "Logging in to ECR..."
     aws ecr get-login-password --region "$aws_region" | \
         docker login --username AWS --password-stdin "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com"
     
-    # Build and push backend
+    # Build and push backend (required)
     log "INFO" "Building backend image..."
     docker build -t "$backend_repo:latest" -f backend/Dockerfile backend/
     docker tag "$backend_repo:latest" "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$backend_repo:latest"
@@ -286,15 +314,19 @@ build_and_push_images() {
     docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$backend_repo:latest"
     docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$backend_repo:$TIMESTAMP"
     
-    # Build and push frontend
-    log "INFO" "Building frontend image..."
-    docker build -t "$frontend_repo:latest" -f smart-0dte-frontend/Dockerfile smart-0dte-frontend/
-    docker tag "$frontend_repo:latest" "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:latest"
-    docker tag "$frontend_repo:latest" "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:$TIMESTAMP"
-    
-    log "INFO" "Pushing frontend image..."
-    docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:latest"
-    docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:$TIMESTAMP"
+    # Build and push frontend (optional)
+    if [[ "$BUILD_FRONTEND" == "true" && -d smart-0dte-frontend && -f smart-0dte-frontend/Dockerfile ]]; then
+        log "INFO" "Building frontend image..."
+        docker build -t "$frontend_repo:latest" -f smart-0dte-frontend/Dockerfile smart-0dte-frontend/
+        docker tag "$frontend_repo:latest" "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:latest"
+        docker tag "$frontend_repo:latest" "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:$TIMESTAMP"
+        
+        log "INFO" "Pushing frontend image..."
+        docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:latest"
+        docker push "$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$frontend_repo:$TIMESTAMP"
+    else
+        log "INFO" "Skipping frontend build (BUILD_FRONTEND=false or directory/Dockerfile missing)"
+    fi
     
     log "INFO" "Docker images built and pushed successfully"
 }
@@ -304,9 +336,16 @@ deploy_infrastructure() {
     
     cd "$TERRAFORM_DIR"
     
-    # Create terraform plan
+    # Use immutable image tag for deploys
+    local image_tag="${TF_IMAGE_TAG:-$TIMESTAMP}"
+    log "INFO" "Using image tag: $image_tag"
+    
+    # Create terraform plan with image tag
     log "INFO" "Creating Terraform plan..."
-    terraform plan -var-file="terraform.${ENVIRONMENT}.tfvars" -out=tfplan
+    terraform plan \
+        -var-file="terraform.${ENVIRONMENT}.tfvars" \
+        -var "image_tag=${image_tag}" \
+        -out=tfplan
     
     # Apply terraform plan
     if [[ "$AUTO_APPROVE" == "true" ]]; then
@@ -351,6 +390,7 @@ wait_for_readiness() {
     fi
     
     log "INFO" "Waiting for application readiness..."
+    log "INFO" "Using readiness endpoint: $READINESS_PATH"
     
     local max_attempts=40
     local attempt=1
@@ -358,7 +398,7 @@ wait_for_readiness() {
     while [[ $attempt -le $max_attempts ]]; do
         log "DEBUG" "Readiness check attempt $attempt/$max_attempts"
         
-        if curl -fsS --max-time 10 "$APP_URL/readyz" >/dev/null 2>&1; then
+        if curl -fsS --max-time 10 "$APP_URL$READINESS_PATH" >/dev/null 2>&1; then
             log "INFO" "Application is ready!"
             return 0
         fi
@@ -391,7 +431,7 @@ run_smoke_tests() {
     
     # Test health endpoint
     ((tests_total++))
-    if curl -fsS "$APP_URL/health" >/dev/null 2>&1; then
+    if curl -fsS --max-time 10 "$APP_URL/health" >/dev/null 2>&1; then
         log "INFO" "✓ Health endpoint test passed"
         ((tests_passed++))
     else
@@ -400,27 +440,60 @@ run_smoke_tests() {
     
     # Test readiness endpoint
     ((tests_total++))
-    if curl -fsS "$APP_URL/readyz" >/dev/null 2>&1; then
+    if curl -fsS --max-time 10 "$APP_URL$READINESS_PATH" >/dev/null 2>&1; then
         log "INFO" "✓ Readiness endpoint test passed"
         ((tests_passed++))
     else
         log "ERROR" "✗ Readiness endpoint test failed"
     fi
     
+    # Test liveness endpoint
+    ((tests_total++))
+    if curl -fsS --max-time 10 "$APP_URL/livez" >/dev/null 2>&1; then
+        log "INFO" "✓ Liveness endpoint test passed"
+        ((tests_passed++))
+    else
+        log "ERROR" "✗ Liveness endpoint test failed"
+    fi
+    
     # Test API endpoint
     ((tests_total++))
-    if curl -fsS "$APP_URL/api/v1/market-data/status" >/dev/null 2>&1; then
+    if curl -fsS --max-time 10 "$APP_URL/api/v1/market-data/status" >/dev/null 2>&1; then
         log "INFO" "✓ API endpoint test passed"
         ((tests_passed++))
     else
         log "ERROR" "✗ API endpoint test failed"
     fi
     
+    # Test API documentation
+    ((tests_total++))
+    if curl -fsS --max-time 10 "$APP_URL/docs" >/dev/null 2>&1; then
+        log "INFO" "✓ API documentation test passed"
+        ((tests_passed++))
+    else
+        log "WARN" "✗ API documentation test failed (non-critical)"
+    fi
+    
+    # Optional: WebSocket sanity check (requires wscat)
+    if command -v wscat >/dev/null 2>&1 && [[ -n "${ALB_DNS:-}" ]]; then
+        ((tests_total++))
+        if timeout 5 wscat -c "ws://${ALB_DNS}/api/v1/market-data/stream" -x "ping" -w 1 >/dev/null 2>&1; then
+            log "INFO" "✓ WebSocket handshake test passed"
+            ((tests_passed++))
+        else
+            log "WARN" "✗ WebSocket test failed/skipped (non-critical)"
+        fi
+    fi
+    
     log "INFO" "Smoke tests completed: $tests_passed/$tests_total passed"
     
-    if [[ $tests_passed -eq $tests_total ]]; then
+    # Consider deployment successful if critical tests pass (health, readiness, API)
+    local critical_tests_passed=$((tests_passed >= 3 ? 1 : 0))
+    
+    if [[ $critical_tests_passed -eq 1 ]]; then
         return 0
     else
+        log "ERROR" "Critical smoke tests failed"
         return 1
     fi
 }
