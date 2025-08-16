@@ -5,7 +5,7 @@ RESTful API for accessing ETF/VIX market data, options chains, and analytics
 Optimized for SPY, QQQ, IWM, and VIX focused trading system.
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, WebSocket
 from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -17,7 +17,7 @@ from ...models.market_data import Symbol, MarketDataPoint, OHLCData, OptionsData
 from ...services.data_storage_service import get_storage_service, DataStorageService
 from ...services.data_feed_service import data_feed_service
 
-router = APIRouter(prefix="/api/v1/market-data", tags=["market-data"])
+router = APIRouter(prefix="/market-data", tags=["market-data"])
 
 # Response Models
 class MarketDataResponse(BaseModel):
@@ -384,7 +384,7 @@ async def get_correlation_data(
 
 # WebSocket Endpoint for Real-time Streaming
 @router.websocket("/stream")
-async def websocket_market_data(websocket):
+async def websocket_market_data(websocket: WebSocket):
     """WebSocket endpoint for real-time market data streaming"""
     await websocket.accept()
     

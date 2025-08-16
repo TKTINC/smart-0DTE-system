@@ -7,7 +7,7 @@ including market data, performance metrics, and correlation data.
 
 import logging
 from typing import Any, Dict, List, Optional, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS, ASYNCHRONOUS
 from influxdb_client.client.query_api import QueryApi
@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 influxdb_client: Optional[InfluxDBClient] = None
 write_api: Optional[WriteApi] = None
 query_api: Optional[QueryApi] = None
+
+
+def to_rfc3339(dt: datetime) -> str:
+    """Convert datetime to RFC3339 format for InfluxDB queries."""
+    return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 async def init_influxdb() -> None:
@@ -64,13 +69,31 @@ async def close_influxdb() -> None:
             logger.info("InfluxDB connection closed")
         except Exception as e:
             logger.error(f"Error closing InfluxDB connection: {e}")
+        finally:
+            influxdb_client = None
+            write_api = None
+            query_api = None
 
 
-def get_influxdb() -> InfluxDBClient:
+def get_influxdb_client() -> InfluxDBClient:
     """Get InfluxDB client instance."""
     if influxdb_client is None:
         raise RuntimeError("InfluxDB client not initialized")
     return influxdb_client
+
+
+def get_write_api() -> WriteApi:
+    """Get InfluxDB write API instance."""
+    if write_api is None:
+        raise RuntimeError("InfluxDB write API not initialized")
+    return write_api
+
+
+def get_query_api() -> QueryApi:
+    """Get InfluxDB query API instance."""
+    if query_api is None:
+        raise RuntimeError("InfluxDB query API not initialized")
+    return query_api
 
 
 class InfluxDBManager:
@@ -85,382 +108,415 @@ class InfluxDBManager:
     
     async def initialize(self):
         """Initialize InfluxDB client."""
-        self.client = get_influxdb()
-        self.write_api = write_api
-        self.query_api = query_api
+        self.client = get_influxdb_client()
+        self.write_api = get_write_api()
+        self.query_api = get_query_api()
     
-    def write_point(
-        self,
-        measurement: str,
-        tags: Dict[str, str],
-        fields: Dict[str, Union[float, int, str, bool]],
-        timestamp: Optional[datetime] = None
-    ) -> bool:
-        """
-        Write a single point to InfluxDB.
-        
-        Args:
-            measurement: Measurement name
-            tags: Tag dictionary
-            fields: Field dictionary
-            timestamp: Point timestamp (defaults to now)
-            
-        Returns:
-            bool: True if successful
-        """
-        try:
-            point = Point(measurement)
-            
-            # Add tags
-            for key, value in tags.items():
-                point = point.tag(key, str(value))
-            
-            # Add fields
-            for key, value in fields.items():
-                point = point.field(key, value)
-            
-            # Set timestamp
-            if timestamp:
-                point = point.time(timestamp, WritePrecision.NS)
-            
-            # Write point
-            self.write_api.write(
-                bucket=self.bucket,
-                org=self.org,
-                record=point
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"InfluxDB write error: {e}")
-            return False
-    
-    def write_points(self, points: List[Point]) -> bool:
-        """
-        Write multiple points to InfluxDB.
-        
-        Args:
-            points: List of Point objects
-            
-        Returns:
-            bool: True if successful
-        """
-        try:
-            self.write_api.write(
-                bucket=self.bucket,
-                org=self.org,
-                record=points
-            )
-            return True
-            
-        except Exception as e:
-            logger.error(f"InfluxDB batch write error: {e}")
-            return False
-    
-    def query(
-        self,
-        query: str,
-        params: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Execute a Flux query.
-        
-        Args:
-            query: Flux query string
-            params: Query parameters
-            
-        Returns:
-            List of query results
-        """
-        try:
-            tables = self.query_api.query(query, org=self.org, params=params)
-            
-            results = []
-            for table in tables:
-                for record in table.records:
-                    results.append(record.values)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"InfluxDB query error: {e}")
-            return []
-    
-    def query_dataframe(self, query: str, params: Optional[Dict[str, Any]] = None):
-        """
-        Execute a Flux query and return as DataFrame.
-        
-        Args:
-            query: Flux query string
-            params: Query parameters
-            
-        Returns:
-            pandas.DataFrame: Query results
-        """
-        try:
-            return self.query_api.query_data_frame(query, org=self.org, params=params)
-        except Exception as e:
-            logger.error(f"InfluxDB DataFrame query error: {e}")
-            return None
-    
-    async def health_check(self) -> bool:
-        """
-        Check InfluxDB health.
-        
-        Returns:
-            bool: True if InfluxDB is healthy
-        """
-        try:
-            health = self.client.health()
-            return health.status == "pass"
-        except Exception as e:
-            logger.error(f"InfluxDB health check failed: {e}")
-            return False
-
-
-# Global InfluxDB manager instance
-influxdb_manager = InfluxDBManager()
-
-
-class MarketDataInflux:
-    """Specialized InfluxDB operations for market data."""
-    
-    def __init__(self, influx_manager: InfluxDBManager):
-        self.influx = influx_manager
-    
-    def write_market_data(
+    async def write_market_data(
         self,
         symbol: str,
         price: float,
-        bid: float,
-        ask: float,
         volume: int,
-        change_percent: float,
-        timestamp: Optional[datetime] = None
+        timestamp: Optional[datetime] = None,
+        **additional_fields
     ) -> bool:
-        """Write market data point."""
-        return self.influx.write_point(
-            measurement="market_data",
-            tags={
-                "symbol": symbol,
-                "exchange": "ARCA"  # Default exchange
-            },
-            fields={
-                "price": price,
-                "bid": bid,
-                "ask": ask,
-                "volume": volume,
-                "change_percent": change_percent
-            },
-            timestamp=timestamp
-        )
+        """
+        Write market data point to InfluxDB.
+        
+        Args:
+            symbol: Trading symbol
+            price: Current price
+            volume: Trading volume
+            timestamp: Data timestamp (defaults to now)
+            **additional_fields: Additional fields to store
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if timestamp is None:
+                timestamp = datetime.utcnow()
+            
+            point = Point("market_data") \
+                .tag("symbol", symbol) \
+                .field("price", price) \
+                .field("volume", volume) \
+                .time(timestamp, WritePrecision.MS)
+            
+            # Add additional fields
+            for key, value in additional_fields.items():
+                if isinstance(value, (int, float)):
+                    point = point.field(key, value)
+                else:
+                    point = point.tag(key, str(value))
+            
+            self.write_api.write(bucket=self.bucket, org=self.org, record=point)
+            return True
+            
+        except Exception as e:
+            logger.error(f"InfluxDB write error for {symbol}: {e}")
+            return False
     
-    def write_options_data(
+    async def write_options_data(
         self,
-        symbol: str,
-        underlying: str,
-        option_type: str,
+        underlying_symbol: str,
         strike: float,
         expiration: str,
+        option_type: str,
         bid: float,
         ask: float,
         last: float,
         volume: int,
-        open_interest: int,
-        implied_volatility: float,
-        delta: float,
-        gamma: float,
-        theta: float,
-        vega: float,
-        timestamp: Optional[datetime] = None
+        timestamp: Optional[datetime] = None,
+        **additional_fields
     ) -> bool:
-        """Write options data point."""
-        return self.influx.write_point(
-            measurement="options_data",
-            tags={
-                "symbol": symbol,
-                "underlying": underlying,
-                "option_type": option_type,
-                "strike": str(strike),
-                "expiration": expiration
-            },
-            fields={
-                "bid": bid,
-                "ask": ask,
-                "last": last,
-                "volume": volume,
-                "open_interest": open_interest,
-                "implied_volatility": implied_volatility,
-                "delta": delta,
-                "gamma": gamma,
-                "theta": theta,
-                "vega": vega
-            },
-            timestamp=timestamp
-        )
+        """
+        Write options data point to InfluxDB.
+        
+        Args:
+            underlying_symbol: Underlying asset symbol
+            strike: Strike price
+            expiration: Expiration date
+            option_type: 'call' or 'put'
+            bid: Bid price
+            ask: Ask price
+            last: Last trade price
+            volume: Trading volume
+            timestamp: Data timestamp (defaults to now)
+            **additional_fields: Additional fields to store
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if timestamp is None:
+                timestamp = datetime.utcnow()
+            
+            point = Point("options_data") \
+                .tag("underlying_symbol", underlying_symbol) \
+                .tag("expiration", expiration) \
+                .tag("option_type", option_type) \
+                .field("strike", strike) \
+                .field("bid", bid) \
+                .field("ask", ask) \
+                .field("last", last) \
+                .field("volume", volume) \
+                .time(timestamp, WritePrecision.MS)
+            
+            # Add additional fields
+            for key, value in additional_fields.items():
+                if isinstance(value, (int, float)):
+                    point = point.field(key, value)
+                else:
+                    point = point.tag(key, str(value))
+            
+            self.write_api.write(bucket=self.bucket, org=self.org, record=point)
+            return True
+            
+        except Exception as e:
+            logger.error(f"InfluxDB options write error for {underlying_symbol}: {e}")
+            return False
     
-    def write_correlation_data(
+    async def write_vix_data(
         self,
-        pair: str,
+        vix_level: float,
+        vix_change: float,
+        regime: str,
+        timestamp: Optional[datetime] = None,
+        **additional_fields
+    ) -> bool:
+        """
+        Write VIX data point to InfluxDB.
+        
+        Args:
+            vix_level: Current VIX level
+            vix_change: Change from previous close
+            regime: Volatility regime (low, medium, high)
+            timestamp: Data timestamp (defaults to now)
+            **additional_fields: Additional fields to store
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if timestamp is None:
+                timestamp = datetime.utcnow()
+            
+            point = Point("vix_data") \
+                .tag("regime", regime) \
+                .field("vix_level", vix_level) \
+                .field("vix_change", vix_change) \
+                .time(timestamp, WritePrecision.MS)
+            
+            # Add additional fields
+            for key, value in additional_fields.items():
+                if isinstance(value, (int, float)):
+                    point = point.field(key, value)
+                else:
+                    point = point.tag(key, str(value))
+            
+            self.write_api.write(bucket=self.bucket, org=self.org, record=point)
+            return True
+            
+        except Exception as e:
+            logger.error(f"InfluxDB VIX write error: {e}")
+            return False
+    
+    async def write_correlation_data(
+        self,
+        symbol1: str,
+        symbol2: str,
         correlation: float,
-        rolling_30d: float,
-        rolling_7d: float,
-        timestamp: Optional[datetime] = None
+        window_size: int,
+        timestamp: Optional[datetime] = None,
+        **additional_fields
     ) -> bool:
-        """Write correlation data point."""
-        return self.influx.write_point(
-            measurement="correlations",
-            tags={"pair": pair},
-            fields={
-                "correlation": correlation,
-                "rolling_30d": rolling_30d,
-                "rolling_7d": rolling_7d
-            },
-            timestamp=timestamp
-        )
+        """
+        Write correlation data point to InfluxDB.
+        
+        Args:
+            symbol1: First symbol
+            symbol2: Second symbol
+            correlation: Correlation coefficient
+            window_size: Rolling window size used for calculation
+            timestamp: Data timestamp (defaults to now)
+            **additional_fields: Additional fields to store
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if timestamp is None:
+                timestamp = datetime.utcnow()
+            
+            point = Point("correlation_data") \
+                .tag("symbol1", symbol1) \
+                .tag("symbol2", symbol2) \
+                .field("correlation", correlation) \
+                .field("window_size", window_size) \
+                .time(timestamp, WritePrecision.MS)
+            
+            # Add additional fields
+            for key, value in additional_fields.items():
+                if isinstance(value, (int, float)):
+                    point = point.field(key, value)
+                else:
+                    point = point.tag(key, str(value))
+            
+            self.write_api.write(bucket=self.bucket, org=self.org, record=point)
+            return True
+            
+        except Exception as e:
+            logger.error(f"InfluxDB correlation write error for {symbol1}-{symbol2}: {e}")
+            return False
     
-    def write_portfolio_performance(
-        self,
-        user_id: str,
-        account_id: str,
-        ticker: str,
-        pnl: float,
-        unrealized_pnl: float,
-        position_count: int,
-        exposure: float,
-        timestamp: Optional[datetime] = None
-    ) -> bool:
-        """Write portfolio performance data."""
-        return self.influx.write_point(
-            measurement="portfolio_performance",
-            tags={
-                "user_id": user_id,
-                "account_id": account_id,
-                "ticker": ticker
-            },
-            fields={
-                "pnl": pnl,
-                "unrealized_pnl": unrealized_pnl,
-                "position_count": position_count,
-                "exposure": exposure
-            },
-            timestamp=timestamp
-        )
-    
-    def write_risk_metrics(
-        self,
-        user_id: str,
-        account_id: str,
-        metric_type: str,
-        value: float,
-        threshold: float,
-        severity: str,
-        timestamp: Optional[datetime] = None
-    ) -> bool:
-        """Write risk metrics data."""
-        return self.influx.write_point(
-            measurement="risk_metrics",
-            tags={
-                "user_id": user_id,
-                "account_id": account_id,
-                "metric_type": metric_type,
-                "severity": severity
-            },
-            fields={
-                "value": value,
-                "threshold": threshold
-            },
-            timestamp=timestamp
-        )
-    
-    def get_market_data_history(
+    async def query_market_data(
         self,
         symbol: str,
         start_time: datetime,
         end_time: Optional[datetime] = None,
-        interval: str = "2m"
+        interval: str = "1m"
     ) -> List[Dict[str, Any]]:
-        """Get historical market data."""
-        if end_time is None:
-            end_time = datetime.utcnow()
+        """
+        Query market data from InfluxDB.
         
-        query = f'''
-        from(bucket: "{self.influx.bucket}")
-          |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
-          |> filter(fn: (r) => r._measurement == "market_data")
-          |> filter(fn: (r) => r.symbol == "{symbol}")
-          |> aggregateWindow(every: {interval}, fn: last, createEmpty: false)
-          |> yield(name: "market_data")
-        '''
-        
-        return self.influx.query(query)
+        Args:
+            symbol: Trading symbol
+            start_time: Start time for query
+            end_time: End time for query (defaults to now)
+            interval: Aggregation interval
+            
+        Returns:
+            List of market data points
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.utcnow()
+            
+            query = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {to_rfc3339(start_time)}, stop: {to_rfc3339(end_time)})
+              |> filter(fn: (r) => r._measurement == "market_data")
+              |> filter(fn: (r) => r.symbol == "{symbol}")
+              |> aggregateWindow(every: {interval}, fn: last, createEmpty: false)
+              |> yield(name: "market_data")
+            '''
+            
+            result = self.query_api.query(query, org=self.org)
+            
+            data_points = []
+            for table in result:
+                for record in table.records:
+                    data_points.append({
+                        'time': record.get_time(),
+                        'symbol': record.values.get('symbol'),
+                        'price': record.get_value(),
+                        'field': record.get_field()
+                    })
+            
+            return data_points
+            
+        except Exception as e:
+            logger.error(f"InfluxDB query error for {symbol}: {e}")
+            return []
     
-    def get_options_data_history(
+    async def query_options_data(
         self,
-        underlying: str,
-        expiration: str,
+        underlying_symbol: str,
         start_time: datetime,
-        end_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None,
+        expiration: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Get historical options data."""
-        if end_time is None:
-            end_time = datetime.utcnow()
+        """
+        Query options data from InfluxDB.
         
-        query = f'''
-        from(bucket: "{self.influx.bucket}")
-          |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
-          |> filter(fn: (r) => r._measurement == "options_data")
-          |> filter(fn: (r) => r.underlying == "{underlying}")
-          |> filter(fn: (r) => r.expiration == "{expiration}")
-          |> yield(name: "options_data")
-        '''
-        
-        return self.influx.query(query)
+        Args:
+            underlying_symbol: Underlying asset symbol
+            start_time: Start time for query
+            end_time: End time for query (defaults to now)
+            expiration: Optional expiration filter
+            
+        Returns:
+            List of options data points
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.utcnow()
+            
+            query = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {to_rfc3339(start_time)}, stop: {to_rfc3339(end_time)})
+              |> filter(fn: (r) => r._measurement == "options_data")
+              |> filter(fn: (r) => r.underlying_symbol == "{underlying_symbol}")
+            '''
+            
+            if expiration:
+                query += f'  |> filter(fn: (r) => r.expiration == "{expiration}")\n'
+            
+            query += '  |> yield(name: "options_data")'
+            
+            result = self.query_api.query(query, org=self.org)
+            
+            data_points = []
+            for table in result:
+                for record in table.records:
+                    data_points.append({
+                        'time': record.get_time(),
+                        'underlying_symbol': record.values.get('underlying_symbol'),
+                        'expiration': record.values.get('expiration'),
+                        'option_type': record.values.get('option_type'),
+                        'strike': record.values.get('strike'),
+                        'value': record.get_value(),
+                        'field': record.get_field()
+                    })
+            
+            return data_points
+            
+        except Exception as e:
+            logger.error(f"InfluxDB options query error for {underlying_symbol}: {e}")
+            return []
     
-    def get_correlation_history(
+    async def query_vix_data(
         self,
-        pair: str,
         start_time: datetime,
-        end_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None,
+        interval: str = "1m"
     ) -> List[Dict[str, Any]]:
-        """Get historical correlation data."""
-        if end_time is None:
-            end_time = datetime.utcnow()
+        """
+        Query VIX data from InfluxDB.
         
-        query = f'''
-        from(bucket: "{self.influx.bucket}")
-          |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
-          |> filter(fn: (r) => r._measurement == "correlations")
-          |> filter(fn: (r) => r.pair == "{pair}")
-          |> yield(name: "correlations")
-        '''
-        
-        return self.influx.query(query)
+        Args:
+            start_time: Start time for query
+            end_time: End time for query (defaults to now)
+            interval: Aggregation interval
+            
+        Returns:
+            List of VIX data points
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.utcnow()
+            
+            query = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {to_rfc3339(start_time)}, stop: {to_rfc3339(end_time)})
+              |> filter(fn: (r) => r._measurement == "vix_data")
+              |> aggregateWindow(every: {interval}, fn: last, createEmpty: false)
+              |> yield(name: "vix_data")
+            '''
+            
+            result = self.query_api.query(query, org=self.org)
+            
+            data_points = []
+            for table in result:
+                for record in table.records:
+                    data_points.append({
+                        'time': record.get_time(),
+                        'regime': record.values.get('regime'),
+                        'value': record.get_value(),
+                        'field': record.get_field()
+                    })
+            
+            return data_points
+            
+        except Exception as e:
+            logger.error(f"InfluxDB VIX query error: {e}")
+            return []
     
-    def get_performance_metrics(
+    async def query_correlation_data(
         self,
-        user_id: str,
-        account_id: str,
+        symbol1: str,
+        symbol2: str,
         start_time: datetime,
-        end_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None,
+        interval: str = "1h"
     ) -> List[Dict[str, Any]]:
-        """Get performance metrics."""
-        if end_time is None:
-            end_time = datetime.utcnow()
+        """
+        Query correlation data from InfluxDB.
         
-        query = f'''
-        from(bucket: "{self.influx.bucket}")
-          |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
-          |> filter(fn: (r) => r._measurement == "portfolio_performance")
-          |> filter(fn: (r) => r.user_id == "{user_id}")
-          |> filter(fn: (r) => r.account_id == "{account_id}")
-          |> yield(name: "performance")
-        '''
-        
-        return self.influx.query(query)
+        Args:
+            symbol1: First symbol
+            symbol2: Second symbol
+            start_time: Start time for query
+            end_time: End time for query (defaults to now)
+            interval: Aggregation interval
+            
+        Returns:
+            List of correlation data points
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.utcnow()
+            
+            query = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {to_rfc3339(start_time)}, stop: {to_rfc3339(end_time)})
+              |> filter(fn: (r) => r._measurement == "correlation_data")
+              |> filter(fn: (r) => r.symbol1 == "{symbol1}" and r.symbol2 == "{symbol2}")
+              |> aggregateWindow(every: {interval}, fn: last, createEmpty: false)
+              |> yield(name: "correlation_data")
+            '''
+            
+            result = self.query_api.query(query, org=self.org)
+            
+            data_points = []
+            for table in result:
+                for record in table.records:
+                    data_points.append({
+                        'time': record.get_time(),
+                        'symbol1': record.values.get('symbol1'),
+                        'symbol2': record.values.get('symbol2'),
+                        'correlation': record.get_value(),
+                        'window_size': record.values.get('window_size')
+                    })
+            
+            return data_points
+            
+        except Exception as e:
+            logger.error(f"InfluxDB correlation query error for {symbol1}-{symbol2}: {e}")
+            return []
 
 
-# Global market data InfluxDB instance
-market_data_influx = MarketDataInflux(influxdb_manager)
+# Global manager instance
+influx_manager = InfluxDBManager()
 

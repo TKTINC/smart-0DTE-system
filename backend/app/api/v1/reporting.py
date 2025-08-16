@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 
-from app.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.schemas.reporting import ReportResponse, ReportScheduleCreate, ReportScheduleResponse
 from app.models.reporting import Report, ReportType, ReportSchedule
 from app.services.odte_reporting_service import ODTEReportingService
@@ -19,19 +20,22 @@ router = APIRouter(
 async def get_daily_report(
     date: date,
     portfolio_id: int = 1,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get daily report for a specific date."""
     # Convert string date to datetime.date
     report_date = date
     
     # Check if report exists
-    report = db.query(Report).filter(
-        Report.portfolio_id == portfolio_id,
-        Report.report_type == ReportType.DAILY,
-        Report.start_date == report_date,
-        Report.end_date == report_date
-    ).first()
+    result = await db.execute(
+        select(Report).where(
+            Report.portfolio_id == portfolio_id,
+            Report.report_type == ReportType.DAILY,
+            Report.start_date == report_date,
+            Report.end_date == report_date
+        )
+    )
+    report = result.scalar_one_or_none()
     
     # If report doesn't exist, generate it
     if not report:
@@ -39,12 +43,15 @@ async def get_daily_report(
         report_data = await reporting_service.generate_daily_report(report_date, portfolio_id)
         
         # Get the newly created report
-        report = db.query(Report).filter(
-            Report.portfolio_id == portfolio_id,
-            Report.report_type == ReportType.DAILY,
-            Report.start_date == report_date,
-            Report.end_date == report_date
-        ).first()
+        result = await db.execute(
+            select(Report).where(
+                Report.portfolio_id == portfolio_id,
+                Report.report_type == ReportType.DAILY,
+                Report.start_date == report_date,
+                Report.end_date == report_date
+            )
+        )
+        report = result.scalar_one_or_none()
         
         if not report:
             raise HTTPException(status_code=500, detail="Failed to generate report")
@@ -66,19 +73,22 @@ async def get_daily_report(
 async def get_daily_report_pdf(
     date: date,
     portfolio_id: int = 1,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get PDF for daily report."""
     # Convert string date to datetime.date
     report_date = date
     
     # Check if report exists
-    report = db.query(Report).filter(
-        Report.portfolio_id == portfolio_id,
-        Report.report_type == ReportType.DAILY,
-        Report.start_date == report_date,
-        Report.end_date == report_date
-    ).first()
+    result = await db.execute(
+        select(Report).where(
+            Report.portfolio_id == portfolio_id,
+            Report.report_type == ReportType.DAILY,
+            Report.start_date == report_date,
+            Report.end_date == report_date
+        )
+    )
+    report = result.scalar_one_or_none()
     
     # If report doesn't exist or PDF doesn't exist, generate it
     if not report or not report.pdf_path:
@@ -86,12 +96,15 @@ async def get_daily_report_pdf(
         report_data = await reporting_service.generate_daily_report(report_date, portfolio_id)
         
         # Get the newly created report
-        report = db.query(Report).filter(
-            Report.portfolio_id == portfolio_id,
-            Report.report_type == ReportType.DAILY,
-            Report.start_date == report_date,
-            Report.end_date == report_date
-        ).first()
+        result = await db.execute(
+            select(Report).where(
+                Report.portfolio_id == portfolio_id,
+                Report.report_type == ReportType.DAILY,
+                Report.start_date == report_date,
+                Report.end_date == report_date
+            )
+        )
+        report = result.scalar_one_or_none()
         
         if not report or not report.pdf_path:
             raise HTTPException(status_code=500, detail="Failed to generate report PDF")
@@ -111,32 +124,34 @@ async def list_reports(
     portfolio_id: int = 1,
     limit: int = 10,
     offset: int = 0,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """List reports with optional filtering."""
-    query = db.query(Report).filter(Report.portfolio_id == portfolio_id)
+    # Build query with filters
+    query = select(Report).where(Report.portfolio_id == portfolio_id)
     
     if report_type:
-        query = query.filter(Report.report_type == report_type)
+        query = query.where(Report.report_type == report_type)
     
     if start_date:
-        query = query.filter(Report.start_date >= start_date)
+        query = query.where(Report.start_date >= start_date)
     
     if end_date:
-        query = query.filter(Report.end_date <= end_date)
+        query = query.where(Report.end_date <= end_date)
     
-    # Order by date descending
-    query = query.order_by(Report.start_date.desc())
+    # Order by date descending and apply pagination
+    query = query.order_by(Report.start_date.desc()).offset(offset).limit(limit)
     
-    # Apply pagination
-    reports = query.offset(offset).limit(limit).all()
+    # Execute query
+    result = await db.execute(query)
+    reports = result.scalars().all()
     
     return reports
 
 @router.post("/schedule", response_model=ReportScheduleResponse)
 async def create_report_schedule(
     schedule: ReportScheduleCreate,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Create a new report schedule."""
     # Create new schedule
@@ -159,10 +174,11 @@ async def create_report_schedule(
 @router.get("/schedule/{schedule_id}", response_model=ReportScheduleResponse)
 async def get_report_schedule(
     schedule_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get a report schedule by ID."""
-    schedule = db.query(ReportSchedule).filter(ReportSchedule.id == schedule_id).first()
+    result = await db.execute(select(ReportSchedule).where(ReportSchedule.id == schedule_id))
+    schedule = result.scalar_one_or_none()
     
     if not schedule:
         raise HTTPException(status_code=404, detail="Report schedule not found")
@@ -172,10 +188,11 @@ async def get_report_schedule(
 @router.delete("/schedule/{schedule_id}")
 async def delete_report_schedule(
     schedule_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Delete a report schedule."""
-    schedule = db.query(ReportSchedule).filter(ReportSchedule.id == schedule_id).first()
+    result = await db.execute(select(ReportSchedule).where(ReportSchedule.id == schedule_id))
+    schedule = result.scalar_one_or_none()
     
     if not schedule:
         raise HTTPException(status_code=404, detail="Report schedule not found")
@@ -190,19 +207,25 @@ async def generate_daily_report(
     background_tasks: BackgroundTasks,
     report_date: Optional[date] = None,
     portfolio_id: int = 1,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Generate daily report in the background."""
     if report_date is None:
         report_date = datetime.utcnow().date()
     
-    # Add task to background
-    background_tasks.add_task(_generate_daily_report_task, report_date, portfolio_id, db)
+    # Add task to background (pass only primitives, not session)
+    background_tasks.add_task(_generate_daily_report_task, report_date, portfolio_id)
     
     return {"message": f"Daily report generation for {report_date} started in background"}
 
-async def _generate_daily_report_task(report_date: date, portfolio_id: int, db: Session):
-    """Background task to generate daily report."""
-    reporting_service = ODTEReportingService(db)
-    await reporting_service.generate_daily_report(report_date, portfolio_id)
+async def _generate_daily_report_task(report_date: date, portfolio_id: int):
+    """Background task to generate daily report with fresh session."""
+    async with AsyncSessionLocal() as db:
+        try:
+            reporting_service = ODTEReportingService(db)
+            await reporting_service.generate_daily_report(report_date, portfolio_id)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise
 

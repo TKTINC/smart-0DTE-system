@@ -7,9 +7,10 @@ and pub/sub messaging for the Smart-0DTE-System.
 
 import json
 import logging
+import msgpack
+import gzip
 from typing import Any, Dict, List, Optional, Union
-import aioredis
-from aioredis import Redis
+import redis.asyncio as redis
 from datetime import datetime, timedelta
 
 from app.core.config import settings
@@ -17,26 +18,30 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Global Redis client
-redis_client: Optional[Redis] = None
+_redis_client: Optional[redis.Redis] = None
+
+
+async def get_redis() -> redis.Redis:
+    """Get Redis client instance."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(
+            settings.REDIS_URL,
+            encoding=None,  # Use binary mode for msgpack
+            decode_responses=False,
+            max_connections=settings.REDIS_POOL_SIZE,
+            retry_on_timeout=True,
+            socket_keepalive=True,
+        )
+    return _redis_client
 
 
 async def init_redis() -> None:
     """Initialize Redis connection."""
-    global redis_client
-    
     try:
-        redis_client = aioredis.from_url(
-            settings.REDIS_URL,
-            encoding="utf-8",
-            decode_responses=True,
-            max_connections=settings.REDIS_POOL_SIZE,
-            retry_on_timeout=True,
-            socket_keepalive=True,
-            socket_keepalive_options={},
-        )
-        
+        client = await get_redis()
         # Test connection
-        await redis_client.ping()
+        await client.ping()
         logger.info("Redis connection established successfully")
         
     except Exception as e:
@@ -46,21 +51,38 @@ async def init_redis() -> None:
 
 async def close_redis() -> None:
     """Close Redis connection."""
-    global redis_client
+    global _redis_client
     
-    if redis_client:
+    if _redis_client:
         try:
-            await redis_client.close()
+            await _redis_client.close()
             logger.info("Redis connection closed")
         except Exception as e:
             logger.error(f"Error closing Redis connection: {e}")
+        finally:
+            _redis_client = None
 
 
-def get_redis() -> Redis:
-    """Get Redis client instance."""
-    if redis_client is None:
-        raise RuntimeError("Redis client not initialized")
-    return redis_client
+def _serialize_data(data: Any) -> bytes:
+    """Serialize data using msgpack and gzip compression."""
+    try:
+        packed = msgpack.packb(data, use_bin_type=True)
+        return gzip.compress(packed)
+    except Exception:
+        # Fallback to JSON if msgpack fails
+        json_data = json.dumps(data, default=str).encode('utf-8')
+        return gzip.compress(json_data)
+
+
+def _deserialize_data(data: bytes) -> Any:
+    """Deserialize data from msgpack and gzip."""
+    try:
+        decompressed = gzip.decompress(data)
+        return msgpack.unpackb(decompressed, raw=False)
+    except Exception:
+        # Fallback to JSON
+        decompressed = gzip.decompress(data)
+        return json.loads(decompressed.decode('utf-8'))
 
 
 class RedisManager:
@@ -71,7 +93,7 @@ class RedisManager:
     
     async def initialize(self):
         """Initialize Redis client."""
-        self.client = get_redis()
+        self.client = await get_redis()
     
     async def set(
         self,
@@ -87,14 +109,16 @@ class RedisManager:
             key: Redis key
             value: Value to store
             ttl: Time to live in seconds
-            serialize: Whether to JSON serialize the value
+            serialize: Whether to serialize the value
             
         Returns:
             bool: True if successful
         """
         try:
-            if serialize and not isinstance(value, str):
-                value = json.dumps(value, default=str)
+            if serialize and not isinstance(value, (str, bytes)):
+                value = _serialize_data(value)
+            elif isinstance(value, str):
+                value = value.encode('utf-8')
             
             if ttl:
                 return await self.client.setex(key, ttl, value)
@@ -115,7 +139,7 @@ class RedisManager:
         
         Args:
             key: Redis key
-            deserialize: Whether to JSON deserialize the value
+            deserialize: Whether to deserialize the value
             
         Returns:
             Value or None if not found
@@ -126,13 +150,14 @@ class RedisManager:
             if value is None:
                 return None
             
-            if deserialize:
+            if deserialize and isinstance(value, bytes):
                 try:
-                    return json.loads(value)
-                except (json.JSONDecodeError, TypeError):
-                    return value
+                    return _deserialize_data(value)
+                except Exception:
+                    # Fallback to string decode
+                    return value.decode('utf-8')
             
-            return value
+            return value.decode('utf-8') if isinstance(value, bytes) else value
             
         except Exception as e:
             logger.error(f"Redis GET error for key {key}: {e}")
