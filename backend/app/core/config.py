@@ -42,14 +42,36 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
     
+    # API Keys for external access
+    VALID_API_KEYS: List[str] = []
+    
+    # Password requirements
+    MIN_PASSWORD_LENGTH: int = 8
+    REQUIRE_SPECIAL_CHARS: bool = True
+    
+    # Session security
+    SESSION_TIMEOUT_MINUTES: int = 30
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOCKOUT_DURATION_MINUTES: int = 15
+    
     # CORS Configuration
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
     CORS_CREDENTIALS: bool = True
     ALLOWED_HOSTS: List[str] = ["*"]
     
-    # Rate Limiting
+    # Rate Limiting Configuration
     RATE_LIMIT_PER_MINUTE: int = 1000
     RATE_LIMIT_BURST: int = 100
+    RATE_LIMIT_PER_HOUR: int = 10000
+    RATE_LIMIT_PER_DAY: int = 100000
+    
+    # Endpoint-specific rate limits
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 10
+    TRADING_RATE_LIMIT_PER_MINUTE: int = 100
+    MARKET_DATA_RATE_LIMIT_PER_MINUTE: int = 500
+    
+    # Rate limiting storage
+    RATE_LIMIT_STORAGE_URL: str = "redis://localhost:6379/1"
     
     # Trading Configuration
     DEFAULT_POSITION_SIZE: float = 24000.0

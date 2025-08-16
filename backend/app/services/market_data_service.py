@@ -16,6 +16,10 @@ from app.services.options_service import options_service
 from app.services.intelligence_service import smart_cross_ticker_engine, vix_regime_detector
 from app.core.redis_client import market_data_cache
 from app.core.influxdb_client import market_data_influx
+from app.utils.market_hours import (
+    is_market_open, get_market_session, get_market_status,
+    validate_trading_time, is_regular_hours
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +44,9 @@ class MarketDataService:
         # Service health status
         self.service_health = {}
         
-        # Market hours tracking
-        self.market_hours = {
-            'pre_market_start': '04:00',
-            'market_open': '09:30',
-            'market_close': '16:00',
-            'after_hours_end': '20:00'
-        }
+        # Market data coordination settings
+        self.coordination_interval = 10  # seconds
+        self.health_check_interval = 60  # seconds
     
     async def initialize(self) -> None:
         """Initialize all market data services."""
@@ -148,75 +148,37 @@ class MarketDataService:
         """Coordinate data flow between services."""
         while self.is_running:
             try:
-                # Check if market is open
-                is_market_open = self._is_market_open()
+                # Get comprehensive market status
+                market_status = get_market_status()
                 
-                # Update market status
-                market_status = {
-                    'is_open': is_market_open,
-                    'session': self._get_market_session(),
-                    'timestamp': datetime.utcnow().isoformat()
-                }
-                
+                # Cache market status
                 await market_data_cache.redis.set('market_status', market_status, ttl=60)
                 
                 # Coordinate data processing based on market status
-                if is_market_open:
+                if market_status['is_open']:
                     await self._process_market_hours_data()
+                elif market_status['is_extended_hours']:
+                    await self._process_extended_hours_data()
                 else:
                     await self._process_after_hours_data()
                 
-                await asyncio.sleep(10)  # Coordinate every 10 seconds
+                await asyncio.sleep(self.coordination_interval)
                 
             except Exception as e:
                 logger.error(f"Error coordinating data flow: {e}")
                 await asyncio.sleep(5)
     
-    def _is_market_open(self) -> bool:
-        """Check if market is currently open."""
+    async def _process_extended_hours_data(self) -> None:
+        """Process data during extended hours (pre-market and after-hours)."""
         try:
-            now = datetime.now()
-            current_time = now.strftime('%H:%M')
+            # Reduced frequency processing for extended hours
+            await self.services['databento'].process_extended_hours()
+            await self.services['options'].process_extended_hours()
             
-            # Simple market hours check (would be more sophisticated in production)
-            weekday = now.weekday()
+            logger.debug("Extended hours data processing completed")
             
-            # Market closed on weekends
-            if weekday >= 5:  # Saturday = 5, Sunday = 6
-                return False
-            
-            # Check if within market hours
-            market_open = self.market_hours['market_open']
-            market_close = self.market_hours['market_close']
-            
-            return market_open <= current_time <= market_close
-            
-        except:
-            return True  # Default to open for development
-    
-    def _get_market_session(self) -> str:
-        """Get current market session."""
-        try:
-            now = datetime.now()
-            current_time = now.strftime('%H:%M')
-            weekday = now.weekday()
-            
-            if weekday >= 5:
-                return 'closed'
-            
-            if current_time < self.market_hours['pre_market_start']:
-                return 'closed'
-            elif current_time < self.market_hours['market_open']:
-                return 'pre_market'
-            elif current_time < self.market_hours['market_close']:
-                return 'regular'
-            elif current_time < self.market_hours['after_hours_end']:
-                return 'after_hours'
-            else:
-                return 'closed'
-                
-        except:
-            return 'regular'  # Default for development
+        except Exception as e:
+            logger.error(f"Error processing extended hours data: {e}")
     
     async def _process_market_hours_data(self) -> None:
         """Process data during market hours."""
